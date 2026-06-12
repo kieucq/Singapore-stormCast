@@ -36,3 +36,11 @@ File type: NetCDF
 # Figures folder
 The figures folder contains images of important plots that may not be rendered in the notebooks when viewed on GitHub.
 
+# Issues
+- For vertical levels, sigma-level approximation is used instead of the true hybrid level coordinate system. Pressure levels defined by sigma values are calculated as$$p_{\text{level}} = \sigma_{\text{level}} * p_{\text{surface}}$$ and these $\sigma_{\text{level}}$ are retrieved from [this FAQ page](https://rapidrefresh.noaa.gov/faq/HRRR.faq.html). However, I suspect that this source is outdated as StormCast documentation refers to HRRR's vertical coordinate system as **hybrid** levels and section 2.1 of [this documentation](https://opensky.ucar.edu/islandora/object/technotes%3A576) of Advanced Research WRF model v4 describes a hybrid level system that I suspect HRRR v4 (the latest version) also uses. Anyway I couldn't find a source for the parameters corresponding to each level in the hybrid system so the sigma levels are used as a first attempt approximation.
+
+- HRRR uses Lambert Conformal Grid. However my conversion from ERA5's lat/lon grid to HRRR-format input just bilinearly interpolates the ERA5 grid (something like a spherical coordinate grid) to the required resolution. Again, suitable for a first approximation.
+
+- Some functions are designed to handle multiple initialisation times while others are designed to only handle one (ie assumes that `len(times)==1`). Just stick to one initialisation time for now.
+
+- `refc` is approximated from total cloud rain water, `tcrw`. As this is not a good approximation, plots of truth vs forecast are given but RMSE and bias is not computed to emphasise that those diagnostics would be unphysical.
