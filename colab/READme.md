@@ -1,3 +1,4 @@
+# Description of contents
 The first portion of my work was done on Colab notebooks, where I learnt how to use StormCast and worked on processing custom ERA5 data and plugging that into StormCast. Below is a list of each notebook in this folder and the changes between each version.
 
 - `01_earth2studio.ipynb`: Very first notebook sent to Dr Chanh, before internship began. Simple code to run inference on StormCast using Earth2Studio.
@@ -11,3 +12,27 @@ The first portion of my work was done on Colab notebooks, where I learnt how to 
 - `08_rmse.ipynb`: Notebook now computes RMSE, MAE and bias between ERA5 truth and StormCast inference over Singapore for up to 12h lead time. Also plots RMSE vs lead time for selected variables as well as visuals of the two versions.
 
 - `utils.py`: Utilities file that is compatible with `08_rmse.ipynb`. May not work for older versions.
+
+# Data used
+All notebooks until `07_lead0_rmse_sanity_check.ipynb` use ERA5 data from 2025-03-25 00:00, while `08_rmse.ipynb` uses ERA5 data from 2025-11-27 06:00 until 18:00 inclusive. The specific sources and variables are:
+
+1. From ERA5 database on [pressure-level variables](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-pressure-levels?tab=download):
+   - Geopotential
+   - Specific humidity
+   - Temperature
+   - U-component of wind
+   - V-component of wind
+2. From ERA5 database on [surface variables](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels?tab=download):
+   - 10m u-component of wind
+   - 10m v-component of wind
+   - 2m temperature
+   - Mean sea level pressure
+   - Surface pressure
+   - Total column rain water
+  
+Latitude range  = [-5, 15]; longitude range = [95, 115]
+File type: NetCDF
+
+# Figures folder
+The figures folder contains images of important plots that may not be rendered in the notebooks when viewed on GitHub.
+
