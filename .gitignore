@@ -1,0 +1,6 @@
+*.nc
+*.zarr/
+*.grib
+*.grib2
+__pycache__/
+.ipynb_checkpoints/
