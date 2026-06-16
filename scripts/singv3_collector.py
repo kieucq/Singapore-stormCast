@@ -167,6 +167,8 @@ def collect(dt: datetime, output_path: Path):
     ds_out.to_netcdf(output_path)
     print(f"\nWrote: {output_path}")
 
+def default_output_path(dt: datetime) -> Path:
+    return Path(f"singv_raw_{dt.strftime('%Y%m%d_%H%M')}.nc")
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -176,8 +178,11 @@ def main():
              "Hour must be one of 01, 07, 13, 19 (UTC).",
     )
     parser.add_argument(
-        "--output", required=True, type=Path,
-        help="Output .nc file path",
+        "--output", required=False, type=Path, default=None,
+        help=(
+            "Output .nc file path. If omitted, defaults to "
+            "singv_raw_YYYYMMDD_HHMM.nc, e.g. singv_raw_20131004_0700.nc"
+        ),
     )
     args = parser.parse_args()
 
@@ -187,8 +192,10 @@ def main():
         print(f"Error parsing --datetime: {e}", file=sys.stderr)
         sys.exit(1)
 
+    output_path = args.output if args.output is not None else default_output_path(dt)
+
     try:
-        collect(dt, args.output)
+        collect(dt, output_path)
     except (FileNotFoundError, RuntimeError, ValueError) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
