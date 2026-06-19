@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """
-diagnose_singv3_simple.py
-
 Prints simple diagnostics tables for one collected SingV3 NetCDF file.
 
 Usage:
-    python diagnose_singv3_simple.py singv_raw_19950115_1900.nc
+    python inspect_singv3_file.py singv_raw_19950115_1900.nc
 """
 
 from __future__ import annotations

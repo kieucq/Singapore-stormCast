@@ -5,7 +5,7 @@ This script checks that the required SingV3 variables and coordinates exist,
 prints NaN diagnostics, and prints the ta/hus/zg zero-mask summary.
 
 Usage:
-        python validate_singv3_file.py <file name>.nc
+        python validate_singv3_dataset.py <file name>.nc
 """
 
 import argparse

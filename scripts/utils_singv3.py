@@ -9,14 +9,16 @@ from scipy.ndimage import distance_transform_edt
 import gc
 from pathlib import Path
 
-# ── Constants / mappings ─────────────────────────
+
+
+# CONSTANTS AND VARIABLE MAPPINGS
 
 REFC_RAIN_THRESHOLD_MMHR = 0.1
 REFC_MIN_DBZ = -10.0
 REFC_MAX_DBZ = 75.0
 
 # SingV3 variable name → StormCast variable name (surface/single-level)
-SINGV_SURFACE_MAP = {
+SINGV_TO_SC_SURFACE = {
     "tas": "t2m",
     "uas": "u10m",
     "vas": "v10m",
@@ -24,7 +26,7 @@ SINGV_SURFACE_MAP = {
 }
 
 # SingV3 variable name → StormCast variable prefix (pressure-level)
-SINGV_PRESSURE_MAP = {
+SINGV_TO_SC_PRESSURE = {
     "ua":  "u",
     "va":  "v",
     "ta":  "t",
@@ -47,20 +49,8 @@ UNITS = {
 }
 
 
-# ── Basic utilities ──────────────────────────────
+# GRID AND XR.DATAARRAY HELPERS
 
-def infer_unit(var: str) -> str:
-    if var in UNITS:
-        return UNITS[var]
-    prefix = var[0]
-    return {"t": "K", "u": "m/s", "v": "m/s", "q": "kg/kg",
-            "Z": "m", "p": "Pa"}.get(prefix, "")
-
-def assert_no_nan(name, field):
-    if np.isnan(field).any():
-        frac = np.isnan(field).mean()
-        raise ValueError(f"{name} contains NaNs after processing. NaN fraction={frac:.6f}")
-    
 class GridSpec:
     def __init__(self, src_lats, src_lons, target_lats, target_lons, hrrr_y, hrrr_x):
         self.src_lats = src_lats
@@ -77,8 +67,8 @@ class GridSpec:
     @property
     def nx(self):
         return len(self.hrrr_x)
-    
-def make_grid(ds_surface, hrrr_y, hrrr_x):
+
+def make_grid_spec(ds_surface, hrrr_y, hrrr_x):
     src_lats = ds_surface["lat"].values
     src_lons = ds_surface["lon"].values
 
@@ -135,7 +125,23 @@ def add_time_dimension(data, time_value):
         "time", "variable", "hrrr_y", "hrrr_x"
     ).astype(np.float32)
 
-def fill_nan_nearest_2d(field: np.ndarray) -> np.ndarray:
+
+
+# BASIC NUMERICAL HELPERS
+
+def infer_unit(var: str) -> str:
+    if var in UNITS:
+        return UNITS[var]
+    prefix = var[0]
+    return {"t": "K", "u": "m/s", "v": "m/s", "q": "kg/kg",
+            "Z": "m", "p": "Pa"}.get(prefix, "")
+
+def assert_no_nan(name, field):
+    if np.isnan(field).any():
+        frac = np.isnan(field).mean()
+        raise ValueError(f"{name} contains NaNs after processing. NaN fraction={frac:.6f}")
+
+def fill_nan_nearest(field: np.ndarray) -> np.ndarray:
     """
     Fill NaNs in a 2D field using nearest valid neighbour.
     Useful for tiny edge missing strips in uas/vas and for final cleanup.
@@ -160,82 +166,527 @@ def fill_nan_nearest_2d(field: np.ndarray) -> np.ndarray:
     filled = arr[tuple(indices)]
     return filled.astype(np.float32)
 
-def get_tgrid_zero_mask(ds_pressure):
+def _insert_field(data, var_name, field):
     """
-    Return shared zero mask for SingV3 T-grid pressure variables.
-    True where ta, hus, and zg are all exactly zero.
+    Put a 2D field into a 3D field array:
+        (variable, hrrr_y, hrrr_x)
     """
-    ta  = ds_pressure["ta"]
-    hus = ds_pressure["hus"]
-    zg  = ds_pressure["zg"]
+    expected_dims = ("variable", "hrrr_y", "hrrr_x")
 
-    return (ta == 0) & (hus == 0) & (zg == 0)
+    if data.dims != expected_dims:
+        raise ValueError(f"Expected dims {expected_dims}, got {data.dims}")
 
-def summarize_tgrid_zero_mask(ds_pressure):
+    if var_name not in data["variable"].values:
+        raise ValueError(f"{var_name} is not in field array variables.")
+
+    field = np.asarray(field, dtype=np.float32)
+
+    expected_shape = (data.sizes["hrrr_y"], data.sizes["hrrr_x"])
+
+    if field.shape != expected_shape:
+        raise ValueError(
+            f"{var_name} has shape {field.shape}, expected {expected_shape}"
+        )
+
+    data.loc[dict(variable=var_name)] = field
+
+
+
+# INTERPOLATION HELPERS
+
+def regrid(field, src_lats, src_lons, target_lats, target_lons):
     """
-    Return diagnostics for whether ta/hus/zg zero masks are identical.
+    Using bilinear interpolation, take an input grid src_lats * src_lons and return the
+    interpolated gric target_lats * target_lons
+
+    Note that this is an approximation as HRRR uses lambert conformal coordinates while ERA5 uses lat/lon
+
+    Input and output fields are 2D maps/grids/matrices
     """
-    ta  = ds_pressure["ta"]
-    hus = ds_pressure["hus"]
-    zg  = ds_pressure["zg"]
 
-    ta_zero = ta == 0
-    hus_zero = hus == 0
-    zg_zero = zg == 0
+    field = np.asarray(field, dtype=np.float32)
 
-    all_zero = ta_zero & hus_zero & zg_zero
-    any_zero = ta_zero | hus_zero | zg_zero
+    # ensures that latitudes are in ascending order
+    # this is a requirement for RegularGridInterpolator
+    if src_lats[0] > src_lats[-1]:
+        src_lats = src_lats[::-1]
+        field = field[::-1, :]
+
+    # our interpolation function. if target point is outside original domain, returns NaN
+    fn = RegularGridInterpolator(
+        (src_lats, src_lons), field,
+        method="linear", bounds_error=False, fill_value=np.nan,
+    )
+
+    # build target grid. lons2d/lats2d returns the lon/lat at the input grid pt [j, i]
+    lons2d, lats2d = np.meshgrid(target_lons, target_lats)
+
+    # RegularGridInterpolator wants points as a list, not as a grid
+    # ie it wants [(lat0, lon0), (lat0, lon1), ... (lat1, lon0), ...]
+    pts = np.stack([lats2d.ravel(), lons2d.ravel()], axis=-1)
+
+    # interpolate and reshape back into 2D map of 32-bit floats
+    return fn(pts).reshape(len(target_lats), len(target_lons)).astype(np.float32)
+
+
+def regrid_all_p_levels(
+    da_pressure_var,
+    src_lats,
+    src_lons,
+    target_lats,
+    target_lons,
+):
+    """
+    Regrid all pressure levels of a SingV3 pressure-level variable.
+
+    Input dimensions are usually:
+        (plev, lat, lon)
+
+    Output:
+        NumPy array with shape:
+        (n_pressure_levels, n_target_lats, n_target_lons)
+    """
+    regridded_levels = []
+
+    n_pressure_levels = len(da_pressure_var["plev"])
+
+    for pressure_index in range(n_pressure_levels):
+        # Select one 2D pressure-level slice: (lat, lon)
+        field_2d = da_pressure_var.isel(plev=pressure_index).values.astype(np.float32)
+
+        # Regrid that 2D slice to the target grid: (target_lat, target_lon)
+        field_2d_regridded = regrid(
+            field=field_2d,
+            src_lats=src_lats,
+            src_lons=src_lons,
+            target_lats=target_lats,
+            target_lons=target_lons,
+        )
+
+        regridded_levels.append(field_2d_regridded)
+        # regridded_levels is a list of 2D grids
+
+    # Stack all pressure levels into one 3D array:
+    # (pressure_level, target_lat, target_lon)
+    return np.stack(regridded_levels, axis=0).astype(np.float32, copy=False)
+
+def vinterp(field_3d, src_pressure_pa, target_pressure_pa):
+    """
+    Vertically interpolate a 3D pressure-level field to a target 2D pressure field.
+
+    First-pass SingV3 pipeline:
+    - pressure-level zero masks are kept as actual zero values
+    - target pressures outside the available pressure range are clamped
+      to the nearest available pressure level
+    """
+
+    sort_order = np.argsort(src_pressure_pa)
+
+    pressure_sorted = src_pressure_pa[sort_order]
+    field_sorted = field_3d[sort_order, :, :]
+
+    target = np.clip(
+        target_pressure_pa,
+        pressure_sorted[0],
+        pressure_sorted[-1],
+    )
+
+    upper_index = np.searchsorted(pressure_sorted, target)
+    upper_index = np.clip(upper_index, 1, len(pressure_sorted) - 1)
+    lower_index = upper_index - 1
+
+    y_indices = np.arange(target.shape[0])[:, None]
+    x_indices = np.arange(target.shape[1])[None, :]
+
+    pressure_lower = pressure_sorted[lower_index]
+    pressure_upper = pressure_sorted[upper_index]
+
+    field_lower = field_sorted[lower_index, y_indices, x_indices]
+    field_upper = field_sorted[upper_index, y_indices, x_indices]
+
+    weight = (target - pressure_lower) / (pressure_upper - pressure_lower)
+
+    interpolated = field_lower + weight * (field_upper - field_lower)
+
+    return interpolated.astype(np.float32)
+
+
+
+# SINGV3 DIAGNOSTICS AND VALIDATION
+
+def print_tgrid_zero_mask_diagnostics(ds_pressure):
+    """Print zero-mask diagnostics for the T-grid pressure variables ta, hus, zg."""
+    ta_zero  = ds_pressure["ta"]  == 0
+    hus_zero = ds_pressure["hus"] == 0
+    zg_zero  = ds_pressure["zg"]  == 0
+
+    all_zero          = ta_zero & hus_zero & zg_zero
+    any_zero          = ta_zero | hus_zero | zg_zero
     inconsistent_zero = any_zero & ~all_zero
 
-    total = all_zero.size
+    total                   = int(all_zero.size)
+    inconsistent_zero_count = int(inconsistent_zero.sum().item())
 
-    return {
-        "total_points": int(total),
-
-        "ta_zero_count": int(ta_zero.sum().item()),
-        "hus_zero_count": int(hus_zero.sum().item()),
-        "zg_zero_count": int(zg_zero.sum().item()),
-
-        "all_three_zero_count": int(all_zero.sum().item()),
-        "any_zero_count": int(any_zero.sum().item()),
-        "inconsistent_zero_count": int(inconsistent_zero.sum().item()),
-
-        "all_three_zero_pct": 100 * float(all_zero.sum().item()) / total,
-        "any_zero_pct": 100 * float(any_zero.sum().item()) / total,
-        "inconsistent_zero_pct": 100 * float(inconsistent_zero.sum().item()) / total,
-
-        "ta_only_zero_count": int((ta_zero & ~hus_zero & ~zg_zero).sum().item()),
-        "hus_only_zero_count": int((~ta_zero & hus_zero & ~zg_zero).sum().item()),
-        "zg_only_zero_count": int((~ta_zero & ~hus_zero & zg_zero).sum().item()),
-
-        "ta_hus_zero_only_count": int((ta_zero & hus_zero & ~zg_zero).sum().item()),
-        "ta_zg_zero_only_count": int((ta_zero & ~hus_zero & zg_zero).sum().item()),
-        "hus_zg_zero_only_count": int((~ta_zero & hus_zero & zg_zero).sum().item()),
-    }
-
-def print_tgrid_zero_mask_summary(stats):
     print("\nT-grid zero-mask diagnostics")
     print("----------------------------")
-    print(f"total points:              {stats['total_points']}")
-    print(f"ta zero count:             {stats['ta_zero_count']}")
-    print(f"hus zero count:            {stats['hus_zero_count']}")
-    print(f"zg zero count:             {stats['zg_zero_count']}")
-    print(f"all three zero count:      {stats['all_three_zero_count']}")
-    print(f"any zero count:            {stats['any_zero_count']}")
-    print(f"inconsistent zero count:   {stats['inconsistent_zero_count']}")
-    print(f"inconsistent zero pct:     {stats['inconsistent_zero_pct']:.6f}%")
+    print(f"total points:              {total}")
+    print(f"ta zero count:             {int(ta_zero.sum().item())}")
+    print(f"hus zero count:            {int(hus_zero.sum().item())}")
+    print(f"zg zero count:             {int(zg_zero.sum().item())}")
+    print(f"all three zero count:      {int(all_zero.sum().item())}")
+    print(f"any zero count:            {int(any_zero.sum().item())}")
+    print(f"inconsistent zero count:   {inconsistent_zero_count}")
+    print(f"inconsistent zero pct:     {100 * inconsistent_zero_count / total:.6f}%")
 
-    if stats["inconsistent_zero_count"] > 0:
+    if inconsistent_zero_count > 0:
         print("\nBreakdown of inconsistent zeroes")
         print("--------------------------------")
-        print(f"ta only:                   {stats['ta_only_zero_count']}")
-        print(f"hus only:                  {stats['hus_only_zero_count']}")
-        print(f"zg only:                   {stats['zg_only_zero_count']}")
-        print(f"ta+hus only:               {stats['ta_hus_zero_only_count']}")
-        print(f"ta+zg only:                {stats['ta_zg_zero_only_count']}")
-        print(f"hus+zg only:               {stats['hus_zg_zero_only_count']}")
+        print(f"ta only:                   {int((ta_zero  & ~hus_zero & ~zg_zero).sum().item())}")
+        print(f"hus only:                  {int((~ta_zero & hus_zero  & ~zg_zero).sum().item())}")
+        print(f"zg only:                   {int((~ta_zero & ~hus_zero & zg_zero ).sum().item())}")
+        print(f"ta+hus only:               {int((ta_zero  & hus_zero  & ~zg_zero).sum().item())}")
+        print(f"ta+zg only:                {int((ta_zero  & ~hus_zero & zg_zero ).sum().item())}")
+        print(f"hus+zg only:               {int((~ta_zero & hus_zero  & zg_zero ).sum().item())}")
 
-# ── Earth2Studio data wrapper ────────────────────
+
+def validate_singv_dataset(ds, verbose=True):
+    """
+    Minimal validation for one collected SingV3 NetCDF file.
+
+    Checks:
+    - required variables exist
+    - required coordinates exist
+    - which variables contain NaNs
+    - ta/hus/zg shared zero-mask diagnostics
+    """
+
+    required_vars = [
+        "tas", "uas", "vas", "psl", "pr",
+        "ua", "va", "ta", "hus", "zg",
+    ]
+
+    required_coords = ["lat", "lon", "plev"]
+
+    missing_vars = [v for v in required_vars if v not in ds]
+    missing_coords = [c for c in required_coords if c not in ds.coords]
+
+    if missing_vars:
+        raise ValueError(f"Missing SingV3 variables: {missing_vars}")
+
+    if missing_coords:
+        raise ValueError(f"Missing SingV3 coordinates: {missing_coords}")
+
+    if not verbose:
+        return True
+
+    print("\nSingV3 dataset validation")
+    print("------------------------")
+
+    if "valid_time" in ds:
+        print(f"valid_time: {ds['valid_time'].values}")
+
+    print(f"lat shape:  {ds['lat'].shape}")
+    print(f"lon shape:  {ds['lon'].shape}")
+    print(f"plev:       {ds['plev'].values}")
+
+    print("\nNaN diagnostics")
+    print("---------------")
+
+    any_nan = False
+
+    for var in required_vars:
+        arr = ds[var].values
+        nan_count = int(np.isnan(arr).sum())
+        total = arr.size
+        nan_pct = 100.0 * nan_count / total
+
+        if nan_count > 0:
+            any_nan = True
+            print(
+                f"{var:4s} contains NaNs: "
+                f"{nan_count}/{total} = {nan_pct:.6f}%"
+            )
+
+    if not any_nan:
+        print("No NaNs found in required variables.")
+
+    print_tgrid_zero_mask_diagnostics(ds)
+
+    return True
+
+
+def validate_field_array(fields, variables, ny, nx):
+    """
+    Validate converted SingV3 fields before adding the StormCast time dimension.
+
+    Expected shape:
+        (variable, hrrr_y, hrrr_x)
+    """
+    ZERO_ALLOWED = {"refc"}
+
+    expected_dims = ("variable", "hrrr_y", "hrrr_x")
+    if fields.dims != expected_dims:
+        raise ValueError(f"Expected dims {expected_dims}, got {fields.dims}")
+
+    expected_shape = (len(variables), ny, nx)
+    if fields.shape != expected_shape:
+        raise ValueError(f"Expected shape {expected_shape}, got {fields.shape}")
+
+    if np.isnan(fields.values).any():
+        nan_frac = np.isnan(fields.values).mean()
+        raise ValueError(f"Converted fields contain NaNs. NaN fraction={nan_frac:.6f}")
+
+    is_filled = (fields != 0).any(dim=("hrrr_y", "hrrr_x"))
+
+    filled         = [v for v in variables if is_filled.sel(variable=v).item()]
+    zero_by_design = [v for v in variables if not is_filled.sel(variable=v).item() and v in ZERO_ALLOWED]
+    missing        = [v for v in variables if not is_filled.sel(variable=v).item() and v not in ZERO_ALLOWED]
+
+    print(
+        f"Filled {len(filled)}/{len(variables)} variables "
+        f"({zero_by_design} intentionally zero, {missing} unexpectedly zero)"
+    )
+
+    if missing:
+        raise ValueError(f"Some variables were not filled: {missing}")
+
+    return True
+
+def validate_stormcast_input_array(data, variables, ny, nx):
+    expected_dims = ("time", "variable", "hrrr_y", "hrrr_x")
+
+    if data.dims != expected_dims:
+        raise ValueError(f"Expected dims {expected_dims}, got {data.dims}")
+
+    expected_shape = (1, len(variables), ny, nx)
+
+    if data.shape != expected_shape:
+        raise ValueError(f"Expected shape {expected_shape}, got {data.shape}")
+
+    is_filled = (data != 0).any(dim=("time", "hrrr_y", "hrrr_x"))
+
+    filled = list(data["variable"].values[is_filled.values])
+    missing = list(data["variable"].values[~is_filled.values])
+
+    print(f"Filled {len(filled)}/{len(variables)} variables ({missing} left as zero)")
+
+    if missing:
+        raise ValueError(f"Some StormCast input variables were not filled: {missing}")
+
+    return True
+
+
+
+# SINGV3 -> STORMCAST CONVERSION
+
+
+def fill_surface_fields(data, ds_surface, grid, verbose=False):
+    """
+    Interpolates surface fields t2m, u10m, v10m and mslp
+    and inserts them into the xr.DataArray
+    """
+
+    available_vars = set(data["variable"].values)
+
+    for singv_name, sc_name in SINGV_TO_SC_SURFACE.items():
+        if sc_name not in available_vars:
+            continue
+
+        raw = ds_surface[singv_name].values.astype(np.float32)
+        if singv_name in ["uas", "vas"]:
+            raw = fill_nan_nearest(raw)
+
+        field = regrid(
+            raw,
+            grid.src_lats,
+            grid.src_lons,
+            grid.target_lats,
+            grid.target_lons,
+        )
+
+        field = fill_nan_nearest(field)
+
+        assert_no_nan(sc_name, field)
+        _insert_field(data, sc_name, field)
+
+        if verbose:
+            print(
+                f"  {singv_name:4s} → {sc_name:5s} | "
+                f"min={field.min():.2f}  max={field.max():.2f}"
+            )
+
+
+def get_surface_pressure(ds_surface, grid, verbose=False):
+    """
+    Return approximate surface pressure on StormCast grid.
+
+    First-pass approximation:
+        surface pressure ≈ psl
+
+    This is not physically exact because psl is mean sea-level pressure,
+    but it is acceptable for a first SingV3 pipeline test.
+    """
+
+    psl_raw = ds_surface["psl"].values.astype(np.float32)
+
+    sp = regrid(
+        psl_raw,
+        grid.src_lats,
+        grid.src_lons,
+        grid.target_lats,
+        grid.target_lons,
+    )
+
+    sp = fill_nan_nearest(sp)
+    assert_no_nan("sp", sp)
+
+    if verbose:
+        print(
+            f"\n  approx sp=psl | min={sp.min():.1f}  "
+            f"mean={sp.mean():.1f}  max={sp.max():.1f} Pa"
+        )
+
+    return sp.astype(np.float32)
+
+
+def fill_hybrid_fields(data, ds_pressure, sp, grid, verbose=False):
+    """
+    Fill hybrid-level variables:
+    u#hl, v#hl, t#hl, q#hl, Z#hl, p#hl.
+    """
+
+    singv_p_pa = ds_pressure["plev"].values.astype(np.float32)
+    available_vars = set(data["variable"].values)
+
+    if verbose:
+        print("\nRegridding SingV3 pressure-level variables...")
+
+    pressure_3d = {}
+
+    # horizontally regrid all singv3 pressure-level variables
+    for singv_name in SINGV_TO_SC_PRESSURE:
+        da = ds_pressure[singv_name]
+
+        pressure_3d[singv_name] = regrid_all_p_levels(
+            da,
+            grid.src_lats,
+            grid.src_lons,
+            grid.target_lats,
+            grid.target_lons,
+        )
+
+        if verbose:
+            arr = pressure_3d[singv_name]
+            print(
+                f"  {singv_name:3s} regridded | "
+                f"min={np.nanmin(arr):.3g}  "
+                f"mean={np.nanmean(arr):.3g}  "
+                f"max={np.nanmax(arr):.3g}"
+            )
+
+    # for each hybrid level, fill u, v, t, q and Z
+    for level, sigma in HRRR_SIGMA.items():
+        p_target = (sigma * sp).astype(np.float32)
+
+        p_name = f"p{level}hl"
+        if p_name in available_vars:
+            _insert_field(data, p_name, p_target)
+
+        for singv_name, sc_prefix in SINGV_TO_SC_PRESSURE.items():
+            sc_name = f"{sc_prefix}{level}hl"
+
+            if sc_name not in available_vars:
+                continue
+
+            field = vinterp(
+                pressure_3d[singv_name],
+                singv_p_pa,
+                p_target,
+            )
+
+            if singv_name == "hus":
+                field = np.maximum(field, 0.0)
+
+            assert_no_nan(sc_name, field)
+            _insert_field(data, sc_name, field.astype(np.float32))
+
+            if verbose:
+                print(
+                    f"  {singv_name:3s} → {sc_name:5s} | "
+                    f"min={field.min():.3g}  mean={field.mean():.3g}  max={field.max():.3g}"
+                )
+
+def fill_refc(data, ds_surface, grid, verbose=False):
+    """Fill refc using SingV3 pr proxy."""
+
+    available_vars = set(data["variable"].values)
+
+    if "refc" not in available_vars:
+        return
+
+    if "pr" not in ds_surface:
+        raise ValueError("Cannot derive refc: SingV3 variable 'pr' not found.")
+
+    pr_raw = ds_surface["pr"].values.astype(np.float32)
+
+    pr = regrid(
+        pr_raw,
+        grid.src_lats,
+        grid.src_lons,
+        grid.target_lats,
+        grid.target_lons,
+    )
+
+    assert_no_nan("pr", pr)
+
+    refc = singv_pr_to_refc(
+        pr,
+        rain_threshold=REFC_RAIN_THRESHOLD_MMHR,
+        min_dbz=REFC_MIN_DBZ,
+        max_dbz=REFC_MAX_DBZ,
+    )
+
+    assert_no_nan("refc", refc)
+    _insert_field(data, "refc", refc)
+
+    if verbose:
+        print(
+            f"  pr → refc | "
+            f"pr min={pr.min():.3g} mean={pr.mean():.3g} max={pr.max():.3g} | "
+            f"refc min={refc.min():.3g} mean={refc.mean():.3g} max={refc.max():.3g}"
+        )
+
+def singv_pr_to_refc(
+    pr,
+    rain_threshold=REFC_RAIN_THRESHOLD_MMHR,
+    min_dbz=REFC_MIN_DBZ,
+    max_dbz=REFC_MAX_DBZ,
+):
+    """
+    Approximate composite reflectivity from SingV3 precipitation rate.
+
+    SingV3 pr units:
+        kg m-2 s-1
+
+    Since 1 kg m-2 is 1 mm water:
+        pr * 3600 = mm/hr
+    """
+    pr = np.maximum(np.asarray(pr, dtype=np.float32), 0.0)
+
+    R_mmhr = pr * 3600.0
+    active = R_mmhr > rain_threshold
+
+    Z_linear = 200.0 * np.maximum(R_mmhr, 1e-10) ** 1.6
+    refc = 10.0 * np.log10(Z_linear)
+
+    refc = np.where(active, refc, min_dbz)
+
+    return np.clip(refc, min_dbz, max_dbz).astype(np.float32)
+
+
+
+
+# EARTH2STUDIO ADAPTER
 
 class MyLocalData:
     """
@@ -309,462 +760,20 @@ class MyLocalData:
 
 
 
-# ── SingV3 validation ──────────────────────────────
 
-def validate_singv_dataset(ds, verbose=True):
-    """
-    Minimal validation for one collected SingV3 NetCDF file.
+# def validate_forecast_output(ds_out, nsteps, verbose=False):
+#     if verbose: 
+#         print(ds_out)
+#         print("lead_time:", ds_out.lead_time.values)
+#         print("n_leads:", ds_out.sizes["lead_time"])
 
-    Checks:
-    - required variables exist
-    - required coordinates exist
-    - which variables contain NaNs
-    - ta/hus/zg shared zero-mask diagnostics
-    """
+#     expected = nsteps + 1
+#     actual = ds_out.sizes["lead_time"]
 
-    required_vars = [
-        "tas", "uas", "vas", "psl", "pr",
-        "ua", "va", "ta", "hus", "zg",
-    ]
+#     if actual != expected:
+#         raise ValueError(f"Expected {expected} lead times, got {actual}")
 
-    required_coords = ["lat", "lon", "plev"]
-
-    missing_vars = [v for v in required_vars if v not in ds]
-    missing_coords = [c for c in required_coords if c not in ds.coords]
-
-    if missing_vars:
-        raise ValueError(f"Missing SingV3 variables: {missing_vars}")
-
-    if missing_coords:
-        raise ValueError(f"Missing SingV3 coordinates: {missing_coords}")
-
-    if not verbose:
-        return True
-
-    print("\nSingV3 dataset validation")
-    print("------------------------")
-
-    if "valid_time" in ds:
-        print(f"valid_time: {ds['valid_time'].values}")
-
-    print(f"lat shape:  {ds['lat'].shape}")
-    print(f"lon shape:  {ds['lon'].shape}")
-    print(f"plev:       {ds['plev'].values}")
-
-    print("\nNaN diagnostics")
-    print("---------------")
-
-    any_nan = False
-
-    for var in required_vars:
-        arr = ds[var].values
-        nan_count = int(np.isnan(arr).sum())
-        total = arr.size
-        nan_pct = 100.0 * nan_count / total
-
-        if nan_count > 0:
-            any_nan = True
-            print(
-                f"{var:4s} contains NaNs: "
-                f"{nan_count}/{total} = {nan_pct:.6f}%"
-            )
-
-    if not any_nan:
-        print("No NaNs found in required variables.")
-
-    stats = summarize_tgrid_zero_mask(ds)
-    print_tgrid_zero_mask_summary(stats)
-
-    return True
-
-
-
-
-def validate_stormcast_input_array(data, variables, ny, nx):
-    expected_dims = ("time", "variable", "hrrr_y", "hrrr_x")
-
-    if data.dims != expected_dims:
-        raise ValueError(f"Expected dims {expected_dims}, got {data.dims}")
-
-    expected_shape = (1, len(variables), ny, nx)
-
-    if data.shape != expected_shape:
-        raise ValueError(f"Expected shape {expected_shape}, got {data.shape}")
-
-    is_filled = (data != 0).any(dim=("time", "hrrr_y", "hrrr_x"))
-
-    filled = list(data["variable"].values[is_filled.values])
-    missing = list(data["variable"].values[~is_filled.values])
-
-    print(f"Filled {len(filled)}/{len(variables)} variables ({missing} left as zero)")
-
-    if missing:
-        raise ValueError(f"Some StormCast input variables were not filled: {missing}")
-
-    return True
-
-def validate_forecast_output(ds_out, nsteps, verbose=False):
-    if verbose: 
-        print(ds_out)
-        print("lead_time:", ds_out.lead_time.values)
-        print("n_leads:", ds_out.sizes["lead_time"])
-
-    expected = nsteps + 1
-    actual = ds_out.sizes["lead_time"]
-
-    if actual != expected:
-        raise ValueError(f"Expected {expected} lead times, got {actual}")
-
-    return True
-
-# ── Interpolation helpers ─────────────────
-
-def hinterp(field, src_lats, src_lons, target_lats, target_lons):
-    """
-    Using bilinear interpolation, take an input grid src_lats * src_lons and return the
-    interpolated gric target_lats * target_lons
-
-    Note that this is an approximation as HRRR uses lambert conformal coordinates while ERA5 uses lat/lon
-
-    Input and output fields are 2D maps/grids/matrices
-    """
-
-    field = np.asarray(field, dtype=np.float32)
-
-    # ensures that latitudes are in ascending order
-    # this is a requirement for RegularGridInterpolator
-    if src_lats[0] > src_lats[-1]:
-        src_lats = src_lats[::-1]
-        field = field[::-1, :]
-
-    # our interpolation function. if target point is outside original domain, returns NaN
-    fn = RegularGridInterpolator(
-        (src_lats, src_lons), field,
-        method="linear", bounds_error=False, fill_value=np.nan,
-    )
-
-    # build target grid. lons2d/lats2d returns the lon/lat at the input grid pt [j, i]
-    lons2d, lats2d = np.meshgrid(target_lons, target_lats)
-
-    # RegularGridInterpolator wants points as a list, not as a grid
-    # ie it wants [(lat0, lon0), (lat0, lon1), ... (lat1, lon0), ...]
-    pts = np.stack([lats2d.ravel(), lons2d.ravel()], axis=-1)
-
-    # interpolate and reshape back into 2D map of 32-bit floats
-    return fn(pts).reshape(len(target_lats), len(target_lons)).astype(np.float32)
-
-
-def hinterp_all_levels(
-    da_pressure_var,
-    src_lats,
-    src_lons,
-    target_lats,
-    target_lons,
-):
-    """
-    Regrid all pressure levels of a SingV3 pressure-level variable.
-
-    Input dimensions are usually:
-        (plev, lat, lon)
-
-    Output:
-        NumPy array with shape:
-        (n_pressure_levels, n_target_lats, n_target_lons)
-    """
-    regridded_levels = []
-
-    n_pressure_levels = len(da_pressure_var["plev"])
-
-    for pressure_index in range(n_pressure_levels):
-        # Select one 2D pressure-level slice: (lat, lon)
-        field_2d = da_pressure_var.isel(plev=pressure_index).values.astype(np.float32)
-
-        # Regrid that 2D slice to the target grid: (target_lat, target_lon)
-        field_2d_regridded = hinterp(
-            field=field_2d,
-            src_lats=src_lats,
-            src_lons=src_lons,
-            target_lats=target_lats,
-            target_lons=target_lons,
-        )
-
-        regridded_levels.append(field_2d_regridded)
-        # regridded_levels is a list of 2D grids
-
-    # Stack all pressure levels into one 3D array:
-    # (pressure_level, target_lat, target_lon)
-    return np.stack(regridded_levels, axis=0).astype(np.float32, copy=False)
-
-def vinterp(field_3d, src_pressure_pa, target_pressure_pa):
-    """
-    Vertically interpolate a 3D pressure-level field to a target 2D pressure field.
-
-    Assumes field_3d is mostly finite. This first-pass SingV3 pipeline keeps
-    pressure-level zero masks as actual zero values rather than converting them
-    to NaN.
-    """
-
-    # 1. Sort pressure levels from low pressure to high pressure.
-    # np.searchsorted expects the coordinate array to be sorted ascending.
-    sort_order = np.argsort(src_pressure_pa)
-
-    pressure_sorted = src_pressure_pa[sort_order]
-    field_sorted = field_3d[sort_order, :, :]
-
-    # 2. For each grid cell, find where the target pressure fits
-    # between the available ERA5 pressure levels.
-
-    # searchsorted returns the index where target_pressure_pa should be inserted
-    # into the sorted array pressure_sorted to keep it sorted.
-    # ie this is literally the index of the pressure level directly above the target pressure
-    upper_index = np.searchsorted(pressure_sorted, target_pressure_pa)
-
-    # Prevent indices from going outside the available pressure-level range.
-    # forces 1 <= upper_index < len(pressure_sorted)
-    # upper_index and lower_index are 2D grids of levels of shape (NY, NX)
-    upper_index = np.clip(upper_index, 1, len(pressure_sorted) - 1)
-    lower_index = upper_index - 1
-
-    # 3. Build y/x index arrays so we can pick values column-by-column.
-    y_indices = np.arange(target_pressure_pa.shape[0])[:, None]
-    x_indices = np.arange(target_pressure_pa.shape[1])[None, :]
-
-    # 4. Get the two pressure levels surrounding each target pressure.
-    pressure_lower = pressure_sorted[lower_index]
-    pressure_upper = pressure_sorted[upper_index]
-
-    # 5. Get the field values at those two surrounding pressure levels.
-    field_lower = field_sorted[lower_index, y_indices, x_indices]
-    field_upper = field_sorted[upper_index, y_indices, x_indices]
-
-    # 6. Compute linear interpolation weight.
-    weight = (target_pressure_pa - pressure_lower) / (
-        pressure_upper - pressure_lower
-    )
-
-    # 7. Linearly interpolate.
-    interpolated = field_lower + weight * (field_upper - field_lower)
-
-    return interpolated.astype(np.float32)
-
-
-# ── ERA5 → StormCast conversion helpers ──────────
-
-def _put_field(data, var_name, field):
-    """
-    Put a 2D field into a 3D field array:
-        (variable, hrrr_y, hrrr_x)
-    """
-    expected_dims = ("variable", "hrrr_y", "hrrr_x")
-
-    if data.dims != expected_dims:
-        raise ValueError(f"Expected dims {expected_dims}, got {data.dims}")
-
-    data.loc[dict(variable=var_name)] = field.astype(np.float32)
-
-
-# interpolates surface fields and inserts them into the xr.DataArray
-def fill_surface_fields(data, ds_surface, grid, verbose=False):
-    """Fill t2m, u10m, v10m, mslp."""
-
-    available_vars = set(data["variable"].values)
-
-    for singv_name, sc_name in SINGV_SURFACE_MAP.items():
-        if sc_name not in available_vars:
-            continue
-
-        raw = ds_surface[singv_name].values.astype(np.float32)
-        if singv_name in ["uas", "vas"]:
-            raw = fill_nan_nearest_2d(raw)
-
-        field = hinterp(
-            raw,
-            grid.src_lats,
-            grid.src_lons,
-            grid.target_lats,
-            grid.target_lons,
-        )
-
-        field = fill_nan_nearest_2d(field)
-
-        assert_no_nan(sc_name, field)
-        _put_field(data, sc_name, field)
-
-        if verbose:
-            print(
-                f"  {singv_name:4s} → {sc_name:5s} | "
-                f"min={field.min():.2f}  max={field.max():.2f}"
-            )
-
-
-def get_surface_pressure(ds_surface, grid, verbose=False):
-    """
-    Return approximate surface pressure on StormCast grid.
-
-    First-pass approximation:
-        surface pressure ≈ psl
-
-    This is not physically exact because psl is mean sea-level pressure,
-    but it is acceptable for a first SingV3 pipeline test.
-    """
-
-    psl_raw = ds_surface["psl"].values.astype(np.float32)
-
-    sp = hinterp(
-        psl_raw,
-        grid.src_lats,
-        grid.src_lons,
-        grid.target_lats,
-        grid.target_lons,
-    )
-
-    sp = fill_nan_nearest_2d(sp)
-    assert_no_nan("sp", sp)
-
-    if verbose:
-        print(
-            f"\n  approx sp=psl | min={sp.min():.1f}  "
-            f"mean={sp.mean():.1f}  max={sp.max():.1f} Pa"
-        )
-
-    return sp.astype(np.float32)
-
-
-def fill_hybrid_fields(data, ds_pressure, sp, grid, verbose=False):
-    """
-    Fill hybrid-level variables:
-    u#hl, v#hl, t#hl, q#hl, Z#hl, p#hl.
-    """
-
-    singv_p_pa = ds_pressure["plev"].values.astype(np.float32)
-    available_vars = set(data["variable"].values)
-
-    if verbose:
-        print("\nRegridding SingV3 pressure-level variables...")
-
-    pressure_3d = {}
-
-    # horiztonally regrid all singv3 pressure-level variables
-    for singv_name in SINGV_PRESSURE_MAP:
-        da = ds_pressure[singv_name]
-
-        pressure_3d[singv_name] = hinterp_all_levels(
-            da,
-            grid.src_lats,
-            grid.src_lons,
-            grid.target_lats,
-            grid.target_lons,
-        )
-
-        if verbose:
-            arr = pressure_3d[singv_name]
-            print(
-                f"  {singv_name:3s} regridded | "
-                f"min={np.nanmin(arr):.3g}  "
-                f"mean={np.nanmean(arr):.3g}  "
-                f"max={np.nanmax(arr):.3g}"
-            )
-
-    # for each hybrid level, fill u, v, t, q and Z
-    for level, sigma in HRRR_SIGMA.items():
-        p_target = (sigma * sp).astype(np.float32)
-
-        p_name = f"p{level}hl"
-        if p_name in available_vars:
-            _put_field(data, p_name, p_target)
-
-        for singv_name, sc_prefix in SINGV_PRESSURE_MAP.items():
-            sc_name = f"{sc_prefix}{level}hl"
-
-            if sc_name not in available_vars:
-                continue
-
-            field = vinterp(
-                pressure_3d[singv_name],
-                singv_p_pa,
-                p_target,
-            )
-
-            if singv_name == "hus":
-                field = np.maximum(field, 0.0)
-
-            assert_no_nan(sc_name, field)
-            _put_field(data, sc_name, field.astype(np.float32))
-
-            if verbose:
-                print(
-                    f"  {singv_name:3s} → {sc_name:5s} | "
-                    f"min={field.min():.3g}  mean={field.mean():.3g}  max={field.max():.3g}"
-                )
-
-def fill_refc(data, ds_surface, grid, verbose=False):
-    """Fill refc using SingV3 pr proxy."""
-
-    available_vars = set(data["variable"].values)
-
-    if "refc" not in available_vars:
-        return
-
-    if "pr" not in ds_surface:
-        raise ValueError("Cannot derive refc: SingV3 variable 'pr' not found.")
-
-    pr_raw = ds_surface["pr"].values.astype(np.float32)
-
-    pr = hinterp(
-        pr_raw,
-        grid.src_lats,
-        grid.src_lons,
-        grid.target_lats,
-        grid.target_lons,
-    )
-
-    assert_no_nan("pr", pr)
-
-    refc = singv_pr_to_refc(
-        pr,
-        rain_threshold=REFC_RAIN_THRESHOLD_MMHR,
-        min_dbz=REFC_MIN_DBZ,
-        max_dbz=REFC_MAX_DBZ,
-    )
-
-    assert_no_nan("refc", refc)
-    _put_field(data, "refc", refc)
-
-    if verbose:
-        print(
-            f"  pr → refc | "
-            f"pr min={pr.min():.3g} mean={pr.mean():.3g} max={pr.max():.3g} | "
-            f"refc min={refc.min():.3g} mean={refc.mean():.3g} max={refc.max():.3g}"
-        )
-
-def singv_pr_to_refc(
-    pr,
-    rain_threshold=REFC_RAIN_THRESHOLD_MMHR,
-    min_dbz=REFC_MIN_DBZ,
-    max_dbz=REFC_MAX_DBZ,
-):
-    """
-    Approximate composite reflectivity from SingV3 precipitation rate.
-
-    SingV3 pr units:
-        kg m-2 s-1
-
-    Since 1 kg m-2 is 1 mm water:
-        pr * 3600 = mm/hr
-    """
-    pr = np.maximum(np.asarray(pr, dtype=np.float32), 0.0)
-
-    R_mmhr = pr * 3600.0
-    active = R_mmhr > rain_threshold
-
-    Z_linear = 200.0 * np.maximum(R_mmhr, 1e-10) ** 1.6
-    refc = 10.0 * np.log10(Z_linear)
-
-    refc = np.where(active, refc, min_dbz)
-
-    return np.clip(refc, min_dbz, max_dbz).astype(np.float32)
-
-
+#     return True
 
 # # —— Verification / diagnostics helpers ————————————————–
 
