@@ -17,6 +17,34 @@ REFC_RAIN_THRESHOLD_MMHR = 0.1
 REFC_MIN_DBZ = -10.0
 REFC_MAX_DBZ = 75.0
 
+# STORMCAST SETTINGS
+
+FULL_HYBRID_LEVELS = [
+    1, 2, 3, 4, 5, 6, 7, 8,
+    9, 10, 11, 13, 15, 20, 25, 30,
+]
+
+PRESSURE_HYBRID_LEVELS = [
+    1, 2, 3, 4, 5, 6, 7,
+    8, 9, 10, 11, 13, 15, 20,
+]
+
+SURFACE_VARIABLES = [
+    "t2m",
+    "u10m",
+    "v10m",
+    "mslp",
+    "refc",
+]
+
+PROFILE_VARIABLES = [
+    "u",
+    "v",
+    "Z",
+    "t",
+    "q",
+]
+
 # SingV3 variable name → StormCast variable name (surface/single-level)
 SINGV_TO_SC_SURFACE = {
     "tas": "t2m",
@@ -72,7 +100,7 @@ def make_grid_spec(ds_surface, hrrr_y, hrrr_x):
     src_lats = ds_surface["lat"].values
     src_lons = ds_surface["lon"].values
 
-    target_lats = np.linspace(src_lats.max(), src_lats.min(), len(hrrr_y))
+    target_lats = np.linspace(src_lats.min(), src_lats.max(), len(hrrr_y))
     target_lons = np.linspace(src_lons.min(), src_lons.max(), len(hrrr_x))
 
     return GridSpec(
@@ -422,7 +450,6 @@ def validate_field_array(fields, variables, ny, nx):
     Expected shape:
         (variable, hrrr_y, hrrr_x)
     """
-    ZERO_ALLOWED = {"refc"}
 
     expected_dims = ("variable", "hrrr_y", "hrrr_x")
     if fields.dims != expected_dims:
@@ -437,18 +464,17 @@ def validate_field_array(fields, variables, ny, nx):
         raise ValueError(f"Converted fields contain NaNs. NaN fraction={nan_frac:.6f}")
 
     is_filled = (fields != 0).any(dim=("hrrr_y", "hrrr_x"))
-
-    filled         = [v for v in variables if is_filled.sel(variable=v).item()]
-    zero_by_design = [v for v in variables if not is_filled.sel(variable=v).item() and v in ZERO_ALLOWED]
-    missing        = [v for v in variables if not is_filled.sel(variable=v).item() and v not in ZERO_ALLOWED]
+    missing        = [v for v in variables if not is_filled.sel(variable=v).item()]
 
     print(
-        f"Filled {len(filled)}/{len(variables)} variables "
-        f"({zero_by_design} intentionally zero, {missing} unexpectedly zero)"
+        f"Filled {len(variables) - len(missing)}/{len(variables)} variables "
+        f"({missing} unexpectedly zero)"
     )
 
     if missing:
-        raise ValueError(f"Some variables were not filled: {missing}")
+        raise ValueError(
+            f"Some variables were not filled: {missing}"
+        )
 
     return True
 
@@ -685,6 +711,111 @@ def singv_pr_to_refc(
 
 
 
+def sc_to_ncview(data):
+    """
+    Convert the flat 99-channel StormCast array into an
+    ncview-friendly Dataset with 11 named variables.
+    """
+    ds = xr.Dataset(attrs=dict(data.attrs))
+
+    # Surface variables
+    for var in SURFACE_VARIABLES:
+        ds[var] = data.sel(
+            variable=var,
+            drop=True,
+        )
+
+        ds[var].attrs["units"] = infer_unit(var)
+
+    # u, v, Z, t and q on 16 hybrid levels
+    for prefix in PROFILE_VARIABLES:
+        names = [
+            f"{prefix}{level}hl"
+            for level in FULL_HYBRID_LEVELS
+        ]
+
+        ds[prefix] = (
+            data
+            .sel(variable=names)
+            .rename(variable="hybrid_level")
+            .assign_coords(
+                hybrid_level=FULL_HYBRID_LEVELS
+            )
+        )
+
+        ds[prefix].attrs["units"] = infer_unit(names[0])
+
+    # p on only 14 hybrid levels
+    pressure_names = [
+        f"p{level}hl"
+        for level in PRESSURE_HYBRID_LEVELS
+    ]
+
+    ds["p"] = (
+        data
+        .sel(variable=pressure_names)
+        .rename(variable="p_hybrid_level")
+        .assign_coords(
+            p_hybrid_level=PRESSURE_HYBRID_LEVELS
+        )
+    )
+
+    ds["p"].attrs["units"] = "Pa"
+
+    return ds
+
+
+def ncview_to_sc(ds, variables):
+    """
+    Convert the ncview-friendly Dataset back into the flat
+    StormCast input array.
+    """
+    fields = {}
+
+    # Surface variables
+    for var in SURFACE_VARIABLES:
+        fields[var] = ds[var]
+
+    # u, v, Z, t and q
+    for prefix in PROFILE_VARIABLES:
+        for level in FULL_HYBRID_LEVELS:
+            name = f"{prefix}{level}hl"
+
+            fields[name] = ds[prefix].sel(
+                hybrid_level=level,
+                drop=True,
+            )
+
+    # p
+    for level in PRESSURE_HYBRID_LEVELS:
+        name = f"p{level}hl"
+
+        fields[name] = ds["p"].sel(
+            p_hybrid_level=level,
+            drop=True,
+        )
+
+    # Reassemble using StormCast's exact variable order
+    data = xr.concat(
+        [
+            fields[var].expand_dims(variable=[var])
+            for var in variables
+        ],
+        dim="variable",
+    )
+
+    return (
+        data
+        .transpose(
+            "time",
+            "variable",
+            "hrrr_y",
+            "hrrr_x",
+        )
+        .astype(np.float32)
+    )
+
+
 
 # EARTH2STUDIO ADAPTER
 
@@ -758,6 +889,139 @@ class MyLocalData:
             variable=requested_variables,
         ).transpose("time", "variable", "hrrr_y", "hrrr_x")
 
+
+
+def build_stormcast_input(
+    ds_singv,
+    variables,
+    hrrr_y,
+    hrrr_x,
+    verbose=True,
+):
+    """
+    Convert one collected SingV3 dataset into a StormCast input array.
+
+    Returns
+    -------
+    data
+        DataArray with dimensions:
+        (time, variable, hrrr_y, hrrr_x)
+
+    singv_time
+        Actual valid time of the SingV3 source data.
+    """
+    validate_singv_dataset(
+        ds_singv,
+        verbose=verbose,
+    )
+
+    if "valid_time" not in ds_singv:
+        raise ValueError(
+            "Collected SingV3 dataset has no valid_time variable."
+        )
+
+    singv_time = np.datetime64(
+        ds_singv["valid_time"].values,
+        "ns",
+    )
+
+    grid = make_grid_spec(
+        ds_surface=ds_singv,
+        hrrr_y=hrrr_y,
+        hrrr_x=hrrr_x,
+    )
+
+    fields = make_empty_field_array(
+        variables=variables,
+        hrrr_y=hrrr_y,
+        hrrr_x=hrrr_x,
+    )
+
+    if verbose:
+        print("\nFilling surface fields...")
+
+    fill_surface_fields(
+        data=fields,
+        ds_surface=ds_singv,
+        grid=grid,
+        verbose=verbose,
+    )
+
+    if verbose:
+        print("\nConstructing approximate surface pressure...")
+
+    surface_pressure = get_surface_pressure(
+        ds_surface=ds_singv,
+        grid=grid,
+        verbose=verbose,
+    )
+
+    if verbose:
+        print("\nFilling hybrid-level fields...")
+
+    fill_hybrid_fields(
+        data=fields,
+        ds_pressure=ds_singv,
+        sp=surface_pressure,
+        grid=grid,
+        verbose=verbose,
+    )
+
+    if verbose:
+        print("\nConstructing reflectivity proxy...")
+
+    fill_refc(
+        data=fields,
+        ds_surface=ds_singv,
+        grid=grid,
+        verbose=verbose,
+    )
+
+    validate_field_array(
+        fields=fields,
+        variables=variables,
+        ny=len(hrrr_y),
+        nx=len(hrrr_x),
+    )
+
+    data = add_time_dimension(
+        data=fields,
+        time_value=singv_time,
+    )
+
+    data.name = "stormcast_input"
+
+    data.attrs.update(
+        {
+            "source": "SingV3 SINGV-RCM reanalysis",
+            "singv_valid_time": str(singv_time),
+            "surface_pressure_note": (
+                "Mean sea-level pressure psl is used as an "
+                "approximation to surface pressure."
+            ),
+            "vertical_coordinate_note": (
+                "StormCast hybrid levels are approximated using "
+                "p_level = sigma * surface_pressure."
+            ),
+            "refc_note": (
+                "Composite reflectivity is approximated from "
+                "SingV3 precipitation rate pr."
+            ),
+            "target_lat_min": float(grid.target_lats.min()),
+            "target_lat_max": float(grid.target_lats.max()),
+            "target_lon_min": float(grid.target_lons.min()),
+            "target_lon_max": float(grid.target_lons.max()),
+        }
+    )
+
+    validate_stormcast_input_array(
+        data=data,
+        variables=variables,
+        ny=len(hrrr_y),
+        nx=len(hrrr_x),
+    )
+
+    return data, singv_time
 
 
 
