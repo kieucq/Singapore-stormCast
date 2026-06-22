@@ -22,7 +22,7 @@ import numpy as np
 import xarray as xr
 
 import earth2studio.run as run
-from earth2studio.data import GFS_FX
+from earth2studio.data import ARCO
 from earth2studio.io import ZarrBackend
 from earth2studio.models.px import StormCast
 
@@ -31,9 +31,6 @@ import utils_singv3 as ut
 
 OUTPUT_DIR = Path("~/scratch/output").expanduser()
 N_STEPS = 1
-
-# An arbitrary date for which GFS data exists.
-TEST_TIME = datetime(2024, 6, 1, 0)
 
 
 def parse_args():
@@ -70,7 +67,7 @@ def main():
 
     model = StormCast.load_model(
         package,
-        conditioning_data_source=GFS_FX(),
+        conditioning_data_source=ARCO(),
     )
 
     variables = (
@@ -92,14 +89,13 @@ def main():
 
     original_time = data["time"].values[0]
 
-    # Temporarily pretend that the SingV fields belong to TEST_TIME.
-    data = data.assign_coords(
-        time=[np.datetime64(TEST_TIME)]
+    run_time = (
+        np.datetime64(original_time, "us")
+        .astype(datetime)
     )
 
-    print("Original SingV time:", original_time)
-    print("Temporary run time: ", TEST_TIME)
-    print("Input shape:        ", data.shape)
+    print("SingV input time:       ", original_time)
+    print("ERA5 conditioning time: ", run_time)
 
     my_data = ut.MyLocalData(data)
 
@@ -112,7 +108,7 @@ def main():
     print("Warning: the GFS conditioning does not match the SingV input.")
 
     run.deterministic(
-        time=[TEST_TIME],
+        time=[run_time],
         nsteps=N_STEPS,
         prognostic=model,
         data=my_data,
@@ -130,7 +126,28 @@ def main():
     ds_ncview = ut.sc_to_ncview(flat_output)
 
     netcdf_path = output_path.with_suffix(".nc")
-    ds_ncview.to_netcdf(netcdf_path)
+
+    encoding = {
+        "time": {
+            "dtype": "int32",
+            "units": "hours since 1970-01-01 00:00:00",
+        },
+        "lead_time": {
+            "dtype": "int32",
+            "units": "hours",
+        },
+        "hybrid_level": {
+            "dtype": "int32",
+        },
+        "p_hybrid_level": {
+            "dtype": "int32",
+        },
+    }
+
+    ds_ncview.to_netcdf(
+        netcdf_path,
+        encoding=encoding,
+    )
 
     ds_out.close()
 
