@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-Prints simple diagnostics tables for one collected SingV3 NetCDF file.
+Print simple diagnostic tables for one collated SingV3 NetCDF file.
 
 Usage:
-    python inspect_singv3_file.py singv_raw_19950115_1900.nc
+    python inspect_singv_dataset.py COLLATED_FILE
+
+Example:
+    python inspect_singv_dataset.py \
+        ~/scratch/pretrained/singv_collated/singv_collated_19950115_1900.nc
 """
 
 from __future__ import annotations
@@ -220,13 +224,13 @@ def print_pressure_tables(ds: xr.Dataset, ds_raw: xr.Dataset) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "netcdf",
+        "collated_file",
         type=Path,
-        help="Path to collected SingV3 NetCDF file.",
+        help="Path to a singv_collated_*.nc file.",
     )
     args = parser.parse_args()
 
-    path = args.netcdf.expanduser().resolve()
+    path = args.collated_file.expanduser().resolve()
 
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")

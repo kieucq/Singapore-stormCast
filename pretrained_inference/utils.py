@@ -1,21 +1,19 @@
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
+"""
+Utilities for converting collated SingV3 data into inputs for
+pretrained StormCast inference.
+"""
 
+import numpy as np
 import xarray as xr
+
 from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import distance_transform_edt
-
-import gc
-from pathlib import Path
-
-
 
 # CONSTANTS AND VARIABLE MAPPINGS
 
 REFC_RAIN_THRESHOLD_MMHR = 0.1
-REFC_MIN_DBZ = -10.0
-REFC_MAX_DBZ = 75.0
+REFC_MIN_DBZ = -10.
+REFC_MAX_DBZ = 75.
 
 # STORMCAST SETTINGS
 
@@ -80,25 +78,25 @@ UNITS = {
 # GRID AND XR.DATAARRAY HELPERS
 
 class GridSpec:
-    def __init__(self, src_lats, src_lons, target_lats, target_lons, hrrr_y, hrrr_x):
+    def __init__(self, src_lats, src_lons, target_lats, target_lons):
         self.src_lats = src_lats
         self.src_lons = src_lons
         self.target_lats = target_lats
         self.target_lons = target_lons
-        self.hrrr_y = hrrr_y
-        self.hrrr_x = hrrr_x
-
-    @property
-    def ny(self):
-        return len(self.hrrr_y)
-
-    @property
-    def nx(self):
-        return len(self.hrrr_x)
 
 def make_grid_spec(ds_surface, hrrr_y, hrrr_x):
     src_lats = ds_surface["lat"].values
     src_lons = ds_surface["lon"].values
+
+    if not np.all(np.diff(src_lats) > 0):
+        raise ValueError(
+            "SingV latitude coordinates must be strictly increasing."
+        )
+
+    if not np.all(np.diff(src_lons) > 0):
+        raise ValueError(
+            "SingV longitude coordinates must be strictly increasing."
+        )
 
     target_lats = np.linspace(src_lats.min(), src_lats.max(), len(hrrr_y))
     target_lons = np.linspace(src_lons.min(), src_lons.max(), len(hrrr_x))
@@ -108,8 +106,6 @@ def make_grid_spec(ds_surface, hrrr_y, hrrr_x):
         src_lons=src_lons,
         target_lats=target_lats,
         target_lons=target_lons,
-        hrrr_y=hrrr_y,
-        hrrr_x=hrrr_x,
     )
 
 def make_empty_field_array(variables, hrrr_y, hrrr_x):
@@ -164,16 +160,21 @@ def infer_unit(var: str) -> str:
     return {"t": "K", "u": "m/s", "v": "m/s", "q": "kg/kg",
             "Z": "m", "p": "Pa"}.get(prefix, "")
 
-def assert_no_nan(name, field):
-    if np.isnan(field).any():
-        frac = np.isnan(field).mean()
-        raise ValueError(f"{name} contains NaNs after processing. NaN fraction={frac:.6f}")
+def assert_finite(name, field):
+    """Raise an error if a processed field contains NaN or infinite values."""
+    field = np.asarray(field)
+    nonfinite = ~np.isfinite(field)
+
+    if nonfinite.any():
+        fraction = float(nonfinite.mean())
+        raise ValueError(
+            f"{name} contains non-finite values after processing. "
+            f"Non-finite fraction={fraction:.6f}"
+        )
+
 
 def fill_nan_nearest(field: np.ndarray) -> np.ndarray:
-    """
-    Fill NaNs in a 2D field using nearest valid neighbour.
-    Useful for tiny edge missing strips in uas/vas and for final cleanup.
-    """
+    """Fill non-finite values in a 2D field using the nearest finite neighbour."""
     arr = np.asarray(field, dtype=np.float32)
 
     missing = ~np.isfinite(arr) # ~ is numpy's logical NOT
@@ -183,7 +184,7 @@ def fill_nan_nearest(field: np.ndarray) -> np.ndarray:
         return arr
 
     if missing.all():
-        raise ValueError("Cannot fill field: all values are NaN.")
+        raise ValueError("Cannot fill field: all values are non-finite.")
 
     indices = distance_transform_edt(
         missing,
@@ -224,21 +225,25 @@ def _insert_field(data, var_name, field):
 
 def regrid(field, src_lats, src_lons, target_lats, target_lons):
     """
-    Using bilinear interpolation, take an input grid src_lats * src_lons and return the
-    interpolated gric target_lats * target_lons
+    Bilinearly interpolate a 2D field from one regular latitude/longitude
+    grid onto another regular latitude/longitude grid.
 
-    Note that this is an approximation as HRRR uses lambert conformal coordinates while ERA5 uses lat/lon
-
-    Input and output fields are 2D maps/grids/matrices
+    Both source coordinate arrays must be one-dimensional. This function
+    does not perform a map-projection transformation.
     """
 
     field = np.asarray(field, dtype=np.float32)
 
-    # ensures that latitudes are in ascending order
-    # this is a requirement for RegularGridInterpolator
-    if src_lats[0] > src_lats[-1]:
-        src_lats = src_lats[::-1]
-        field = field[::-1, :]
+    src_lats = np.asarray(src_lats)
+    src_lons = np.asarray(src_lons)
+
+    expected_shape = (len(src_lats), len(src_lons))
+
+    if field.shape != expected_shape:
+        raise ValueError(
+            f"Field shape {field.shape} does not match source grid "
+            f"shape {expected_shape}."
+        )
 
     # our interpolation function. if target point is outside original domain, returns NaN
     fn = RegularGridInterpolator(
@@ -300,12 +305,12 @@ def regrid_all_p_levels(
 
 def vinterp(field_3d, src_pressure_pa, target_pressure_pa):
     """
-    Vertically interpolate a 3D pressure-level field to a target 2D pressure field.
+    Vertically interpolate a three-dimensional pressure-level field onto
+    a two-dimensional target-pressure field.
 
-    First-pass SingV3 pipeline:
-    - pressure-level zero masks are kept as actual zero values
-    - target pressures outside the available pressure range are clamped
-      to the nearest available pressure level
+    Subterranean zero masks are expected to have been sanitized before this
+    function is called. Target pressures outside the available pressure range
+    are clamped to the nearest available pressure level.
     """
 
     sort_order = np.argsort(src_pressure_pa)
@@ -379,7 +384,7 @@ def print_tgrid_zero_mask_diagnostics(ds_pressure):
 
 def validate_singv_dataset(ds, verbose=True):
     """
-    Minimal validation for one collected SingV3 NetCDF file.
+    Minimal validation for one collated SingV3 NetCDF file.
 
     Checks:
     - required variables exist
@@ -459,9 +464,14 @@ def validate_field_array(fields, variables, ny, nx):
     if fields.shape != expected_shape:
         raise ValueError(f"Expected shape {expected_shape}, got {fields.shape}")
 
-    if np.isnan(fields.values).any():
-        nan_frac = np.isnan(fields.values).mean()
-        raise ValueError(f"Converted fields contain NaNs. NaN fraction={nan_frac:.6f}")
+    nonfinite = ~np.isfinite(fields.values)
+
+    if nonfinite.any():
+        fraction = float(nonfinite.mean())
+        raise ValueError(
+            f"Converted fields contain non-finite values. "
+            f"Non-finite fraction={fraction:.6f}"
+        )
 
     is_filled = (fields != 0).any(dim=("hrrr_y", "hrrr_x"))
     missing        = [v for v in variables if not is_filled.sel(variable=v).item()]
@@ -488,6 +498,15 @@ def validate_stormcast_input_array(data, variables, ny, nx):
 
     if data.shape != expected_shape:
         raise ValueError(f"Expected shape {expected_shape}, got {data.shape}")
+    
+    nonfinite = ~np.isfinite(data.values)
+
+    if nonfinite.any():
+        fraction = float(nonfinite.mean())
+        raise ValueError(
+            f"StormCast input contains non-finite values. "
+            f"Non-finite fraction={fraction:.6f}"
+        )
 
     is_filled = (data != 0).any(dim=("time", "hrrr_y", "hrrr_x"))
 
@@ -530,9 +549,7 @@ def fill_surface_fields(data, ds_surface, grid, verbose=False):
             grid.target_lons,
         )
 
-        field = fill_nan_nearest(field)
-
-        assert_no_nan(sc_name, field)
+        assert_finite(sc_name, field)
         _insert_field(data, sc_name, field)
 
         if verbose:
@@ -544,13 +561,12 @@ def fill_surface_fields(data, ds_surface, grid, verbose=False):
 
 def get_surface_pressure(ds_surface, grid, verbose=False):
     """
-    Return approximate surface pressure on StormCast grid.
+    Return an approximate surface-pressure field on the target grid.
 
-    First-pass approximation:
-        surface pressure ≈ psl
-
-    This is not physically exact because psl is mean sea-level pressure,
-    but it is acceptable for a first SingV3 pipeline test.
+    Mean sea-level pressure is used as a proxy because true SingV surface
+    pressure is unavailable. This approximation is retained only for testing
+    the pretrained StormCast compatibility pipeline and is not physically
+    consistent over elevated terrain.
     """
 
     psl_raw = ds_surface["psl"].values.astype(np.float32)
@@ -563,8 +579,7 @@ def get_surface_pressure(ds_surface, grid, verbose=False):
         grid.target_lons,
     )
 
-    sp = fill_nan_nearest(sp)
-    assert_no_nan("sp", sp)
+    assert_finite("sp", sp)
 
     if verbose:
         print(
@@ -633,7 +648,7 @@ def fill_hybrid_fields(data, ds_pressure, sp, grid, verbose=False):
             if singv_name == "hus":
                 field = np.maximum(field, 0.0)
 
-            assert_no_nan(sc_name, field)
+            assert_finite(sc_name, field)
             _insert_field(data, sc_name, field.astype(np.float32))
 
             if verbose:
@@ -663,7 +678,7 @@ def fill_refc(data, ds_surface, grid, verbose=False):
         grid.target_lons,
     )
 
-    assert_no_nan("pr", pr)
+    assert_finite("pr", pr)
 
     refc = singv_pr_to_refc(
         pr,
@@ -672,7 +687,7 @@ def fill_refc(data, ds_surface, grid, verbose=False):
         max_dbz=REFC_MAX_DBZ,
     )
 
-    assert_no_nan("refc", refc)
+    assert_finite("refc", refc)
     _insert_field(data, "refc", refc)
 
     if verbose:
@@ -899,7 +914,7 @@ def build_stormcast_input(
     verbose=True,
 ):
     """
-    Convert one collected SingV3 dataset into a StormCast input array.
+    Convert one collated SingV3 dataset into a StormCast input array.
 
     Returns
     -------
@@ -917,7 +932,7 @@ def build_stormcast_input(
 
     if "valid_time" not in ds_singv:
         raise ValueError(
-            "Collected SingV3 dataset has no valid_time variable."
+            "Collated SingV3 dataset has no valid_time variable."
         )
 
     singv_time = np.datetime64(
@@ -993,7 +1008,7 @@ def build_stormcast_input(
 
     data.attrs.update(
         {
-            "source": "SingV3 SINGV-RCM reanalysis",
+            "source": "SINGV-RCM ERA5-driven reanalysis (CCRS), vn5",
             "singv_valid_time": str(singv_time),
             "surface_pressure_note": (
                 "Mean sea-level pressure psl is used as an "
@@ -1022,354 +1037,3 @@ def build_stormcast_input(
     )
 
     return data, singv_time
-
-
-
-# def validate_forecast_output(ds_out, nsteps, verbose=False):
-#     if verbose: 
-#         print(ds_out)
-#         print("lead_time:", ds_out.lead_time.values)
-#         print("n_leads:", ds_out.sizes["lead_time"])
-
-#     expected = nsteps + 1
-#     actual = ds_out.sizes["lead_time"]
-
-#     if actual != expected:
-#         raise ValueError(f"Expected {expected} lead times, got {actual}")
-
-#     return True
-
-# # —— Verification / diagnostics helpers ————————————————–
-
-# def lead_hour(ds, lead_idx):
-#     return int(ds.lead_time.values[lead_idx] / np.timedelta64(1, "h"))
-
-
-# def valid_time_for_lead(start_time, ds, lead_idx):
-#     return pd.Timestamp(start_time) + pd.to_timedelta(ds.lead_time.values[lead_idx])
-
-
-# def get_forecast_field(ds, var, lead_idx):
-#     return (
-#         ds[var]
-#         .isel(time=0, lead_time=lead_idx)
-#         .values
-#         .astype(np.float32)
-#     )
-
-
-# def get_truth_field(truth, var):
-#     return truth.sel(variable=var).values.astype(np.float32)
-
-
-# def compute_metrics(forecast, truth):
-#     error = forecast - truth
-
-#     return {
-#         "rmse": float(np.sqrt(np.nanmean(error ** 2))),
-#         "bias": float(np.nanmean(error)),
-#         "mae": float(np.nanmean(np.abs(error))),
-#     }
-
-# def compute_verification_metrics(ds_out, start_time, variables, truth_builder):
-#     records = []
-
-#     for lead_idx in range(ds_out.sizes["lead_time"]):
-#         valid_time = valid_time_for_lead(start_time, ds_out, lead_idx)
-#         hour = lead_hour(ds_out, lead_idx)
-
-#         print(f"Verifying lead {hour}h, valid_time={valid_time}")
-
-#         truth = truth_builder(valid_time.to_pydatetime(), variables=variables)
-
-#         for var in variables:
-#             forecast_field = get_forecast_field(ds_out, var, lead_idx)
-#             truth_field = get_truth_field(truth, var)
-
-#             metrics = compute_metrics(forecast_field, truth_field)
-
-#             records.append({
-#                 "lead_idx": lead_idx,
-#                 "lead_hour": hour,
-#                 "valid_time": valid_time,
-#                 "variable": var,
-#                 **metrics,
-#                 "unit": infer_unit(var),
-#             })
-
-#             del forecast_field, truth_field
-#         del truth
-#     return pd.DataFrame(records)
-
-# def build_truth_cache(ds_out, start_time, variables, leads, truth_builder):
-#     truth_cache = {}
-
-#     for lead_idx in leads:
-#         valid_time = valid_time_for_lead(start_time, ds_out, lead_idx)
-#         hour = lead_hour(ds_out, lead_idx)
-
-#         print(f"Building panel truth for lead {hour}h, valid_time={valid_time}")
-
-#         truth_cache[lead_idx] = truth_builder(
-#             valid_time.to_pydatetime(),
-#             variables=variables,
-#         )
-
-#     return truth_cache
-
-# def get_metric_from_df(df_metrics, var, lead_idx, metric):
-#     row = df_metrics[
-#         (df_metrics["variable"] == var)
-#         & (df_metrics["lead_idx"] == lead_idx)
-#     ]
-
-#     if row.empty:
-#         return None
-
-#     return float(row[metric].iloc[0])
-
-
-
-# # —— Verification plotting helpers ——————————————————————
-
-
-
-# def robust_limits(fields, lower=1, upper=99):
-#     vals = np.concatenate([
-#         f[np.isfinite(f)].ravel()
-#         for f in fields
-#         if np.isfinite(f).any()
-#     ])
-
-#     if vals.size == 0:
-#         return 0.0, 1.0
-
-#     vmin, vmax = np.nanpercentile(vals, [lower, upper])
-
-#     if np.isclose(vmin, vmax):
-#         vmin = float(np.nanmin(vals))
-#         vmax = float(np.nanmax(vals))
-
-#     if np.isclose(vmin, vmax):
-#         vmin -= 1.0
-#         vmax += 1.0
-
-#     return float(vmin), float(vmax)
-
-
-# def symmetric_robust_limit(fields, percentile=99):
-#     vals = np.concatenate([
-#         f[np.isfinite(f)].ravel()
-#         for f in fields
-#         if np.isfinite(f).any()
-#     ])
-
-#     if vals.size == 0:
-#         return 1.0
-
-#     vmax = np.nanpercentile(np.abs(vals), percentile)
-
-#     if vmax == 0 or not np.isfinite(vmax):
-#         vmax = np.nanmax(np.abs(vals))
-
-#     if vmax == 0 or not np.isfinite(vmax):
-#         vmax = 1.0
-
-#     return float(vmax)
-
-# # ── 13. Forecast / truth / error panel function ───────────────────────────────
-
-
-
-
-# def format_error_title(df_metrics, var, lead_idx, unit):
-#     rmse = get_metric_from_df(df_metrics, var, lead_idx, "rmse")
-#     bias = get_metric_from_df(df_metrics, var, lead_idx, "bias")
-
-#     if rmse is None or bias is None:
-#         return "Forecast − proxy truth\nqualitative only"
-
-#     return f"Forecast − truth\nRMSE={rmse:.3g} {unit}, Bias={bias:.3g} {unit}"
-
-# def field_title(kind, var, hour):
-#     if var == "refc" and kind == "truth":
-#         return f"ERA5 tcrw-derived proxy\n{var}, lead {hour}h"
-
-#     if kind == "truth":
-#         return f"ERA5 truth\n{var}, lead {hour}h"
-
-#     if kind == "forecast":
-#         return f"StormCast forecast\n{var}, lead {hour}h"
-
-#     raise ValueError(f"Unknown kind: {kind}")
-
-# def plot_forecast_truth_error_panel(
-#     var,
-#     leads_to_plot,
-#     ds,
-#     truth_cache,
-#     df_metrics,
-#     save_dir,
-#     field_percentiles=(1, 99),
-#     error_percentile=99,
-#     dpi=160,
-# ):
-#     if var not in ds.data_vars:
-#         print(f"Skipping {var}: not found in ds_out")
-#         return
-
-#     unit = infer_unit(var)
-
-#     forecast_fields = {}
-#     truth_fields = {}
-#     error_fields = {}
-
-#     for lead_idx in leads_to_plot:
-#         forecast = get_forecast_field(ds, var, lead_idx)
-#         truth = get_truth_field(truth_cache[lead_idx], var)
-
-#         forecast_fields[lead_idx] = forecast
-#         truth_fields[lead_idx] = truth
-#         error_fields[lead_idx] = forecast - truth
-
-#     vmin, vmax = robust_limits(
-#         list(forecast_fields.values()) + list(truth_fields.values()),
-#         lower=field_percentiles[0],
-#         upper=field_percentiles[1],
-#     )
-
-#     err_vmax = symmetric_robust_limit(
-#         list(error_fields.values()),
-#         percentile=error_percentile,
-#     )
-
-#     fig, axes = plt.subplots(
-#         len(leads_to_plot),
-#         3,
-#         figsize=(15, 4.2 * len(leads_to_plot)),
-#         squeeze=False,
-#     )
-
-#     for row, lead_idx in enumerate(leads_to_plot):
-#         hour = lead_hour(ds, lead_idx)
-
-#         panels = [
-#             {
-#                 "field": truth_fields[lead_idx],
-#                 "title": field_title("truth", var, hour),
-#                 "cmap": None,
-#                 "vmin": vmin,
-#                 "vmax": vmax,
-#                 "label": unit,
-#             },
-#             {
-#                 "field": forecast_fields[lead_idx],
-#                 "title": field_title("forecast", var, hour),
-#                 "cmap": None,
-#                 "vmin": vmin,
-#                 "vmax": vmax,
-#                 "label": unit,
-#             },
-#             {
-#                 "field": error_fields[lead_idx],
-#                 "title": format_error_title(df_metrics, var, lead_idx, unit),
-#                 "cmap": "RdBu_r",
-#                 "vmin": -err_vmax,
-#                 "vmax": err_vmax,
-#                 "label": f"error [{unit}]",
-#             },
-#         ]
-
-#         for col, panel in enumerate(panels):
-#             im = axes[row, col].imshow(
-#                 panel["field"],
-#                 origin="upper",
-#                 cmap=panel["cmap"],
-#                 vmin=panel["vmin"],
-#                 vmax=panel["vmax"],
-#             )
-
-#             axes[row, col].set_title(panel["title"])
-#             axes[row, col].set_xlabel("hrrr_x")
-#             axes[row, col].set_ylabel("hrrr_y")
-#             plt.colorbar(im, ax=axes[row, col], label=panel["label"])
-
-#     fig.suptitle(
-#         f"{var}: ERA5 truth vs StormCast forecast vs error",
-#         fontsize=16,
-#         y=1.01,
-#     )
-
-#     plt.tight_layout()
-
-#     out_path = save_dir / f"{var}_forecast_truth_error_panel.png"
-#     plt.savefig(out_path, dpi=dpi, bbox_inches="tight")
-#     plt.show()
-
-#     print(f"Saved: {out_path}")
-
-#     del forecast_fields, truth_fields, error_fields
-#     gc.collect()
-
-
-
-# def plot_error_curves(
-#     df_metrics,
-#     variables=None,
-#     metrics=("rmse", "mae", "bias"),
-#     save_dir=None,
-#     include_lead0=True,
-#     dpi=160,
-# ):
-#     """
-#     Plot verification error curves as a function of forecast lead time.
-
-#     One figure is produced per variable.
-#     """
-
-#     if variables is None:
-#         variables = list(df_metrics["variable"].unique())
-
-#     if save_dir is not None:
-#         save_dir = Path(save_dir)
-#         save_dir.mkdir(exist_ok=True)
-
-#     for var in variables:
-#         sub = df_metrics[df_metrics["variable"] == var].copy()
-
-#         if not include_lead0:
-#             sub = sub[sub["lead_hour"] > 0]
-
-#         if sub.empty:
-#             print(f"Skipping {var}: no metrics found.")
-#             continue
-
-#         unit = sub["unit"].iloc[0]
-
-#         plt.figure(figsize=(6, 4))
-
-#         for metric in metrics:
-#             if metric not in sub.columns:
-#                 continue
-
-#             plt.plot(
-#                 sub["lead_hour"],
-#                 sub[metric],
-#                 marker="o",
-#                 label=metric.upper(),
-#             )
-
-#         plt.axhline(0, linewidth=1)
-#         plt.xlabel("Forecast lead time [h]")
-#         plt.ylabel(f"Error [{unit}]")
-#         plt.title(f"{var}: error vs forecast lead time")
-#         plt.grid(True)
-#         plt.legend()
-#         plt.tight_layout()
-
-#         if save_dir is not None:
-#             out_path = save_dir / f"{var}_error_curve.png"
-#             plt.savefig(out_path, dpi=dpi, bbox_inches="tight")
-#             print(f"Saved: {out_path}")
-
-#         plt.show()

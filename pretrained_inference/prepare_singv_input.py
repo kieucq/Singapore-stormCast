@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Convert one collected SingV3 NetCDF file into an ncview-friendly
+Convert one collated SingV3 NetCDF file into an ncview-friendly
 representation of the StormCast input fields.
 
 Usage:
-    python build_singv_input.py PATH_TO_SINGV_FILE
+    python prepare_singv_input.py PATH_TO_SINGV_FILE
 
 Example:
-    python build_singv_input.py \
-        ~/scratch/singv_raw/singv_raw_20141201_0100.nc
+    python prepare_singv_input.py \
+        ~/scratch/pretrained/singv_collated/singv_collated_20141201_0100.nc
 
 Output:
-    ~/scratch/singv_sc/singv_sc_20141201_0100.nc
+    ~/scratch/pretrained/singv_inputs/singv_input_20141201_0100.nc
 
 This script performs conversion, validation, and NetCDF storage only.
 It does not run StormCast inference.
@@ -27,19 +27,20 @@ import xarray as xr
 from earth2studio.data import GFS_FX
 from earth2studio.models.px import StormCast
 
-import utils_singv3 as ut
+import utils as ut
 
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-OUTPUT_DIR = Path("~/scratch/singv_sc").expanduser()
+PRETRAINED_DIR = Path("~/scratch/pretrained").expanduser()
+OUTPUT_DIR = PRETRAINED_DIR / "singv_inputs"
 
 # ── Command-line arguments ────────────────────────────────────────────────────
 
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Convert one collected SingV3 NetCDF file into a "
+            "Convert one collated SingV3 NetCDF file into a "
             "ncview-friendly representation of the StormCast input fields."
         )
     )
@@ -47,7 +48,7 @@ def parse_args():
     parser.add_argument(
         "input_file",
         type=Path,
-        help="Path to the collected SingV3 NetCDF file.",
+        help="Path to the collated SingV3 NetCDF file.",
     )
 
     return parser.parse_args()
@@ -55,19 +56,19 @@ def parse_args():
 
 def make_output_path(input_path):
     """
-    Derive the output filename from the SingV3 source filename.
+    Derive the prepared-input filename from the collated SingV filename.
 
     Example:
-        singv_raw_20141201_0100.nc
-        → singv_sc_20141201_0100.nc
+        singv_collated_20141201_0100.nc
+        → singv_input_20141201_0100.nc
     """
     stem = input_path.stem
 
-    if stem.startswith("singv_raw_"):
-        timestamp = stem.removeprefix("singv_raw_")
-        output_name = f"singv_sc_{timestamp}.nc"
+    if stem.startswith("singv_collated_"):
+        timestamp = stem.removeprefix("singv_collated_")
+        output_name = f"singv_input_{timestamp}.nc"
     else:
-        output_name = f"singv_sc_{stem}.nc"
+        output_name = f"singv_input_{stem}.nc"
 
     return OUTPUT_DIR / output_name
 
@@ -180,7 +181,27 @@ def save_input(
     if output_path.exists():
         print(f"Warning: overwriting existing file: {output_path}")
 
-    dataset.to_netcdf(output_path)
+    encoding = {}
+
+    if "time" in dataset.coords:
+        encoding["time"] = {
+            "dtype": "int32",
+            "units": "hours since 1970-01-01 00:00:00",
+            "_FillValue": None,
+        }
+
+    for coord in ["hybrid_level", "p_hybrid_level"]:
+        if coord in dataset.coords:
+            encoding[coord] = {
+                "dtype": "int32",
+                "_FillValue": None,
+            }
+
+    dataset.to_netcdf(
+        output_path,
+        format="NETCDF4_CLASSIC",
+        encoding=encoding,
+    )
 
     size_mb = output_path.stat().st_size / (1024 ** 2)
 
@@ -218,6 +239,22 @@ def main():
         input_path,
         mask_and_scale=True,
     ) as ds_singv:
+
+        # ── Preprocess Subterranean Zero-Masks (Thermodynamic Grid Only) ──────
+        if "ta" in ds_singv:
+            print("\nPreprocessing: Sanitizing subterranean zero-masks for T-grid...")
+            # Isolate genuine atmospheric cells (where temperature is above absolute zero)
+            valid_atmosphere = ds_singv["ta"] > 0.0
+            
+            # Wipe out the 0.0 cliffs and vertically backward-fill down pressure levels
+            for var in ["ta", "zg", "hus"]:
+                if var in ds_singv:
+                    ds_singv[var] = ds_singv[var].where(valid_atmosphere).bfill(dim="plev")
+                    
+            # Specific humidity physical floor safety guard
+            if "hus" in ds_singv:
+                ds_singv["hus"] = ds_singv["hus"].clip(min=0.0)
+        # ──────────────────────────────────────────────────────────────────────
 
         data, singv_time = ut.build_stormcast_input(
             ds_singv=ds_singv,

@@ -1,17 +1,22 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
-collect_singv_rcm.py
-
-Collects the SINGV-RCM ERA5-driven variables needed for the StormCast ERA5
-pipeline, for a single requested datetime, and writes them to one .nc file.
+Collect the SingV3 variables required by the pretrained StormCast input
+pipeline for one requested datetime, and combine them into one NetCDF file.
 
 Usage:
-    python singv3_collector.py --datetime 2014-12-01T01:00 --output out.nc
+    python collect_singv.py --datetime 2014-12-01T01:00
 
-Pressure-level (6hr) variables are only available at 01/07/13/19 (UTC,
-per filename convention — TBC with Dr Chanh). Surface (1hr) variables are
-available every hour. This script requires the requested hour to be one
-of 1, 7, 13, 19 and will raise an error otherwise.
+Optional explicit output path:
+    python collect_singv.py \
+        --datetime 2014-12-01T01:00 \
+        --output PATH_TO_OUTPUT_FILE
+
+Default output:
+    ~/scratch/pretrained/singv_collated/singv_collated_20141201_0100.nc
+
+Pressure-level variables are available every six hours at 01/07/13/19 UTC,
+according to the archive filename convention. Surface variables are available
+hourly. The requested hour must therefore be one of 01, 07, 13, or 19 UTC.
 """
 
 import argparse
@@ -28,6 +33,9 @@ BASE_DIR = Path(
     "/home/project/13004327/data_service/model_data/V3_Historical/"
     "V3-WMC-2/CCRS/ERA5/historical/reanalysis/SINGV-RCM/vn5"
 )
+
+PRETRAINED_DIR = Path("~/scratch/pretrained").expanduser()
+OUTPUT_DIR = PRETRAINED_DIR / "singv_collated"
 
 # Variables to collect, with their frequency directory and StormCast role
 SURFACE_VARS = {
@@ -168,7 +176,8 @@ def collect(dt: datetime, output_path: Path):
     print(f"\nWrote: {output_path}")
 
 def default_output_path(dt: datetime) -> Path:
-    return Path(f"singv_raw_{dt.strftime('%Y%m%d_%H%M')}.nc")
+    filename = f"singv_collated_{dt.strftime('%Y%m%d_%H%M')}.nc"
+    return OUTPUT_DIR / filename
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -180,8 +189,9 @@ def main():
     parser.add_argument(
         "--output", required=False, type=Path, default=None,
         help=(
-            "Output .nc file path. If omitted, defaults to "
-            "singv_raw_YYYYMMDD_HHMM.nc, e.g. singv_raw_20131004_0700.nc"
+            "Optional output NetCDF path. If omitted, the file is written to "
+            "~/scratch/pretrained/singv_collated/ using the name "
+            "singv_collated_YYYYMMDD_HHMM.nc."
         ),
     )
     args = parser.parse_args()
@@ -192,7 +202,11 @@ def main():
         print(f"Error parsing --datetime: {e}", file=sys.stderr)
         sys.exit(1)
 
-    output_path = args.output if args.output is not None else default_output_path(dt)
+    output_path = (
+        args.output.expanduser()
+        if args.output is not None
+        else default_output_path(dt)
+    )
 
     try:
         collect(dt, output_path)

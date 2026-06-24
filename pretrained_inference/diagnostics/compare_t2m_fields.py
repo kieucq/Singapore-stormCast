@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 
 """
-Compare raw SingV surface temperature with converted StormCast temperature.
+Compare collated SingV surface temperature with the prepared StormCast input.
 
 This script reads:
 
-- A raw SingV NetCDF file containing the surface-temperature variable ``tas``
-- A converted StormCast-compatible NetCDF file containing ``t2m``
+- A collated SingV NetCDF file containing the surface-temperature variable
+  ``tas``
+- A prepared StormCast input NetCDF file containing ``t2m``
 
-It reproduces the same horizontal regridding used during the SingV-to-StormCast
+It reproduces the horizontal regridding used during the SingV-to-StormCast
 conversion, then compares the expected regridded temperature field against the
 saved ``t2m`` field.
 
 The script reports:
 
-- Raw and converted array shapes
+- Collated and prepared-input array shapes
 - Temperature ranges
 - Maximum absolute difference
 - Mean absolute difference
@@ -22,40 +23,44 @@ The script reports:
 
 Usage
 -----
-    python compare_t2m.py RAW_FILE CONVERTED_FILE
+    python compare_t2m_fields.py COLLATED_FILE INPUT_FILE
 
 Example
 -------
-    python compare_t2m.py \
-        ~/scratch/singv_raw/singv_raw_20131004_0700.nc \
-        ~/scratch/singv_sc/singv_sc_20131004_0700.nc
+    python compare_t2m_fields.py \
+        ~/scratch/pretrained/singv_collated/singv_collated_20131004_0700.nc \
+        ~/scratch/pretrained/singv_inputs/singv_input_20131004_0700.nc
 
-A correctly converted file should normally produce differences close to zero,
+A correctly prepared input should normally produce differences close to zero,
 apart from small floating-point rounding errors.
 """
 
-
 import argparse
+import sys
+from pathlib import Path
 
 import numpy as np
 import xarray as xr
 
-import utils_singv3 as ut
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import utils as ut
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Compare raw SingV tas with converted StormCast t2m."
+        description="Compare collated SingV tas with prepared StormCast t2m."
     )
 
     parser.add_argument(
-        "raw_file",
-        help="Path to singv_raw_*.nc",
+        "collated_file",
+        type=Path,
+        help="Path to a singv_collated_*.nc file.",
     )
 
     parser.add_argument(
-        "converted_file",
-        help="Path to singv_sc_*.nc",
+        "input_file",
+        type=Path,
+        help="Path to a singv_input_*.nc file.",
     )
 
     return parser.parse_args()
@@ -64,31 +69,34 @@ def parse_args():
 def main():
     args = parse_args()
 
+    collated_path = args.collated_file.expanduser()
+    input_path = args.input_file.expanduser()
+
     with xr.open_dataset(
-        args.raw_file,
+        collated_path,
         mask_and_scale=True,
-    ) as ds_raw, xr.open_dataset(
-        args.converted_file,
+    ) as ds_collated, xr.open_dataset(
+        input_path,
         mask_and_scale=True,
-    ) as ds_sc:
+    ) as ds_input:
 
         # Remove any singleton dimensions, leaving (lat, lon)
-        raw_tas = (
-            ds_raw["tas"]
+        collated_tas = (
+            ds_collated["tas"]
             .squeeze(drop=True)
             .values
             .astype(np.float32)
         )
 
         saved_t2m = (
-            ds_sc["t2m"]
+            ds_input["t2m"]
             .squeeze(drop=True)
             .values
             .astype(np.float32)
         )
 
-        src_lats = ds_raw["lat"].values
-        src_lons = ds_raw["lon"].values
+        src_lats = ds_collated["lat"].values
+        src_lons = ds_collated["lon"].values
 
         ny, nx = saved_t2m.shape
 
@@ -106,7 +114,7 @@ def main():
         )
 
         expected_t2m = ut.regrid(
-            field=raw_tas,
+            field=collated_tas,
             src_lats=src_lats,
             src_lons=src_lons,
             target_lats=target_lats,
@@ -117,11 +125,11 @@ def main():
 
         difference = saved_t2m - expected_t2m
 
-        print("Raw tas shape:       ", raw_tas.shape)
-        print("Converted t2m shape: ", saved_t2m.shape)
+        print("Collated tas shape: ", collated_tas.shape)
+        print("Prepared t2m shape: ", saved_t2m.shape)
 
-        print("\nRaw tas range:")
-        print(float(np.nanmin(raw_tas)), "to", float(np.nanmax(raw_tas)))
+        print("\nCollated tas range:")
+        print(float(np.nanmin(collated_tas)), "to", float(np.nanmax(collated_tas)))
 
         print("\nExpected regridded range:")
         print(
