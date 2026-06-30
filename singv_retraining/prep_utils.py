@@ -1,7 +1,7 @@
 """
 Utilities for the first SINGV -> StormCast retraining preprocessing stage.
 
-This module converts one collated SINGV state from the native 960 x 960
+This module converts one assembled SINGV state from the native 960 x 960
 latitude/longitude grid into a cropped and regridded 624 x 624 state.
 
 This retraining pipeline keeps the native
@@ -172,7 +172,7 @@ def validate_source_dataset(ds: xr.Dataset) -> None:
 
 
 def extract_valid_time(ds: xr.Dataset) -> np.datetime64:
-    """Read the scalar valid_time from a collated SINGV file."""
+    """Read the scalar valid_time from an assembled SINGV file."""
     if "valid_time" not in ds:
         raise ValueError("Input dataset has no valid_time variable.")
 
@@ -449,7 +449,7 @@ def preprocess_one_state(
     verbose: bool = True,
 ) -> xr.Dataset:
     """
-    Convert one collated SINGV file into a 75-channel 624 x 624 state.
+    Convert one assembled SINGV file into a 75-channel 624 x 624 state.
 
     The returned Dataset is not normalized. Pressure-level cells that fail
     the valid-fraction threshold remain NaN. They will be excluded from
@@ -526,7 +526,7 @@ def preprocess_one_state(
             )
 
     # Source mask from ta. Below-ground cells are represented by zero in the
-    # collated SINGV files, while decoded fill values appear as NaN.
+    # assembled SINGV files, while decoded fill values appear as NaN.
     ta_source = np.asarray(ds_cropped["ta"].values, dtype=np.float32)
     source_valid = np.isfinite(ta_source) & (ta_source > 0.0)
 
@@ -721,7 +721,7 @@ def preprocess_one_state(
         },
         attrs={
             "source": "SINGV-RCM ERA5-driven reanalysis (CCRS), vn5",
-            "processing_stage": "single-state retraining preprocessing",
+            "processing_stage": "prepared",
             "source_grid_shape": f"{EXPECTED_SOURCE_SHAPE[0]}x{EXPECTED_SOURCE_SHAPE[1]}",
             "crop_pixels_each_side": CROP_PIXELS,
             "cropped_grid_shape": f"{CROPPED_SHAPE[0]}x{CROPPED_SHAPE[1]}",

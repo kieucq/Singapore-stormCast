@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Prepare one collated SINGV file for StormCast retraining.
+Prepare one assembled SINGV state for StormCast retraining.
 
-This is the first preprocessing stage only. It:
+This preparation stage:
 
-1. validates one 960 x 960 collated SINGV file;
+1. validates one 960 x 960 assembled SINGV state;
 2. crops 12 pixels from every edge;
 3. regrids 936 x 936 -> 624 x 624;
 4. keeps the 14 native SINGV pressure levels;
@@ -18,17 +18,16 @@ to a later stage.
 
 Usage
 -----
-python prepare_state.py PATH_TO_COLLATED_FILE
+python prepare_state.py PATH_TO_ASSEMBLED_FILE
 
 Example
 -------
 python prepare_state.py \
-    ~/scratch/pretrained/singv_collated/singv_collated_20141201_0100.nc
+    ~/scratch/retraining/assembled/assembled_20141201_0100.nc
 
 Default output
 --------------
-~/scratch/singv-retraining/singv_retraining_states/
-    singv_training_state_20141201_0100.nc
+~/scratch/retraining/prepared/prepared_20141201_0100.nc
 """
 
 from __future__ import annotations
@@ -43,21 +42,21 @@ import xarray as xr
 import prep_utils as prep
 
 
-RETRAINING_DIR = Path("~/scratch/singv-retraining").expanduser()
-DEFAULT_OUTPUT_DIR = RETRAINING_DIR / "singv_retraining_states"
+RETRAINING_DIR = Path("~/scratch/retraining").expanduser()
+DEFAULT_OUTPUT_DIR = RETRAINING_DIR / "prepared"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Crop, regrid, mask, and stack one collated SINGV file "
+            "Crop, regrid, mask, and stack one assembled SINGV state "
             "for StormCast regression retraining."
         )
     )
     parser.add_argument(
         "input_file",
         type=Path,
-        help="Path to singv_collated_YYYYMMDD_HHMM.nc",
+        help="Path to assembled_YYYYMMDD_HHMM.nc",
     )
     parser.add_argument(
         "--output-dir",
@@ -91,11 +90,11 @@ def parse_args() -> argparse.Namespace:
 def make_output_path(input_path: Path, output_dir: Path) -> Path:
     stem = input_path.stem
 
-    if stem.startswith("singv_collated_"):
-        timestamp = stem.removeprefix("singv_collated_")
-        filename = f"singv_training_state_{timestamp}.nc"
+    if stem.startswith("assembled_"):
+        timestamp = stem.removeprefix("assembled_")
+        filename = f"prepared_{timestamp}.nc"
     else:
-        filename = f"singv_training_state_{stem}.nc"
+        filename = f"prepared_{stem}.nc"
 
     return output_dir.expanduser() / filename
 
@@ -220,8 +219,8 @@ def main() -> None:
             "Use --overwrite to replace it."
         )
 
-    print("SINGV RETRAINING STATE PREPROCESSOR")
-    print("===================================")
+    print("SINGV STATE PREPARATION")
+    print("=======================")
     print("Input:                ", input_path)
     print("Output:               ", output_path)
     print("Crop:                  12 pixels per side")
@@ -240,7 +239,7 @@ def main() -> None:
             verbose=not args.quiet,
         )
     
-    processed.attrs["source_file"] = str(input_path)
+    processed.attrs["source_file"] = str(input_path.resolve())
     
     save_dataset(
         processed,
