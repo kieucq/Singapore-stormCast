@@ -8,7 +8,7 @@ For a requested input time t, this script:
 2. prepares both states as 75-channel 624 x 624 NetCDF files;
 3. reuses existing assembled and prepared files unless overwriting is requested;
 4. verifies that the prepared files form a valid six-hour pair;
-5. records the pair in a CSV manifest.
+5. optionally records the pair in a CSV manifest.
 
 Example
 -------
@@ -269,7 +269,7 @@ def build_pair(
     *,
     overwrite_assembled: bool = False,
     overwrite_prepared: bool = False,
-    manifest_path: Path = DEFAULT_MANIFEST_PATH,
+    manifest_path: Path | None = DEFAULT_MANIFEST_PATH,
     quiet: bool = False,
 ) -> TrainingPair:
     """Assemble, prepare, validate, and record one t -> t+6h pair."""
@@ -314,7 +314,9 @@ def build_pair(
     )
 
     validate_pair(pair)
-    record_pair(pair, manifest_path)
+
+    if manifest_path is not None:
+        record_pair(pair, manifest_path)
 
     return pair
 
