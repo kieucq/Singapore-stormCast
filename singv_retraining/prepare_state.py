@@ -82,7 +82,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--quiet",
         action="store_true",
-        help="Suppress per-variable diagnostics.",
+        help="Suppress detailed diagnostics and the output summary.",
     )
     return parser.parse_args()
 
@@ -203,21 +203,92 @@ def print_summary(dataset: xr.Dataset, output_path: Path) -> None:
     print("Last channels:         ", dataset["channel"].values[-5:].tolist())
 
 
+def prepare_state(
+    input_path: Path,
+    output_path: Path | None = None,
+    *,
+    overwrite: bool = False,
+    valid_fraction_threshold: float = prep.VALID_FRACTION_THRESHOLD,
+    verbose: bool = True,
+) -> Path:
+    """
+    Prepare one assembled SINGV state and save it as a NetCDF file.
+
+    Parameters
+    ----------
+    input_path
+        Path to assembled_YYYYMMDD_HHMM.nc.
+    output_path
+        Explicit prepared output path. When omitted, the default prepared
+        directory and filename are used.
+    overwrite
+        Replace an existing output file.
+    valid_fraction_threshold
+        Minimum remapped valid fraction required for a pressure-level cell.
+    verbose
+        Print per-variable diagnostics and the output summary.
+
+    Returns
+    -------
+    Path
+        Path to the prepared NetCDF file.
+    """
+    input_path = input_path.expanduser()
+
+    if output_path is None:
+        output_path = make_output_path(
+            input_path,
+            DEFAULT_OUTPUT_DIR,
+        )
+    else:
+        output_path = output_path.expanduser()
+
+    if not input_path.is_file():
+        raise FileNotFoundError(
+            f"Input file not found: {input_path}"
+        )
+
+    # Check before performing the expensive preprocessing.
+    if output_path.exists() and not overwrite:
+        raise FileExistsError(
+            f"Output already exists: {output_path}\n"
+            "Use overwrite=True to replace it."
+        )
+
+    with xr.open_dataset(
+        input_path,
+        mask_and_scale=True,
+        decode_times=True,
+    ) as source:
+        processed = prep.preprocess_one_state(
+            source,
+            valid_fraction_threshold=valid_fraction_threshold,
+            verbose=verbose,
+        )
+
+    processed.attrs["source_file"] = str(input_path.resolve())
+
+    save_dataset(
+        processed,
+        output_path,
+        overwrite=overwrite,
+    )
+
+    if verbose:
+        print_summary(processed, output_path)
+
+    return output_path
+
+
 def main() -> None:
     args = parse_args()
     start = perf_counter()
 
     input_path = args.input_file.expanduser()
-    output_path = make_output_path(input_path, args.output_dir)
-
-    if not input_path.is_file():
-        raise FileNotFoundError(f"Input file not found: {input_path}")
-
-    if output_path.exists() and not args.overwrite:
-        raise FileExistsError(
-            f"Output already exists: {output_path}\n"
-            "Use --overwrite to replace it."
-        )
+    output_path = make_output_path(
+        input_path,
+        args.output_dir,
+    )
 
     print("SINGV STATE PREPARATION")
     print("=======================")
@@ -228,25 +299,13 @@ def main() -> None:
     print("Valid threshold:       ", args.valid_fraction_threshold)
     print("Normalization:          deferred")
 
-    with xr.open_dataset(
+    prepare_state(
         input_path,
-        mask_and_scale=True,
-        decode_times=True,
-    ) as source:
-        processed = prep.preprocess_one_state(
-            source,
-            valid_fraction_threshold=args.valid_fraction_threshold,
-            verbose=not args.quiet,
-        )
-    
-    processed.attrs["source_file"] = str(input_path.resolve())
-    
-    save_dataset(
-        processed,
         output_path,
         overwrite=args.overwrite,
+        valid_fraction_threshold=args.valid_fraction_threshold,
+        verbose=not args.quiet,
     )
-    print_summary(processed, output_path)
 
     elapsed_minutes = (perf_counter() - start) / 60.0
     print(f"\nCompleted successfully in {elapsed_minutes:.2f} minutes.")

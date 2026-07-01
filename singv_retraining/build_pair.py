@@ -104,7 +104,6 @@ def ensure_prepared(
     assembled_path: Path,
     *,
     overwrite: bool,
-    valid_fraction_threshold: float,
     quiet: bool,
 ) -> Path:
     """Create or reuse one prepared state."""
@@ -118,36 +117,14 @@ def ensure_prepared(
         print(f"Reusing prepared state:  {output_path}")
         return output_path
 
-    if not assembled_path.is_file():
-        raise FileNotFoundError(
-            f"Assembled input file not found: {assembled_path}"
-        )
-
     print(f"Preparing state:         {assembled_path}")
 
-    with xr.open_dataset(
+    return preparer.prepare_state(
         assembled_path,
-        mask_and_scale=True,
-        decode_times=True,
-    ) as source:
-        processed = preparer.prep.preprocess_one_state(
-            source,
-            valid_fraction_threshold=valid_fraction_threshold,
-            verbose=not quiet,
-        )
-
-    processed.attrs["source_file"] = str(assembled_path.resolve())
-
-    preparer.save_dataset(
-        processed,
         output_path,
         overwrite=overwrite,
+        verbose=not quiet,
     )
-
-    if not quiet:
-        preparer.print_summary(processed, output_path)
-
-    return output_path
 
 
 def _read_scalar_time(dataset: xr.Dataset, path: Path) -> np.datetime64:
@@ -292,9 +269,6 @@ def build_pair(
     *,
     overwrite_assembled: bool = False,
     overwrite_prepared: bool = False,
-    valid_fraction_threshold: float = (
-        preparer.prep.VALID_FRACTION_THRESHOLD
-    ),
     manifest_path: Path = DEFAULT_MANIFEST_PATH,
     quiet: bool = False,
 ) -> TrainingPair:
@@ -324,13 +298,11 @@ def build_pair(
     prepared_input = ensure_prepared(
         assembled_input,
         overwrite=effective_overwrite_prepared,
-        valid_fraction_threshold=valid_fraction_threshold,
         quiet=quiet,
     )
     prepared_target = ensure_prepared(
         assembled_target,
         overwrite=effective_overwrite_prepared,
-        valid_fraction_threshold=valid_fraction_threshold,
         quiet=quiet,
     )
 
@@ -377,15 +349,6 @@ def parse_args() -> argparse.Namespace:
         help="Regenerate both prepared files but reuse assembled files.",
     )
     parser.add_argument(
-        "--valid-fraction-threshold",
-        type=float,
-        default=preparer.prep.VALID_FRACTION_THRESHOLD,
-        help=(
-            "Minimum remapped valid fraction for pressure-level cells "
-            f"(default: {preparer.prep.VALID_FRACTION_THRESHOLD})."
-        ),
-    )
-    parser.add_argument(
         "--manifest",
         type=Path,
         default=DEFAULT_MANIFEST_PATH,
@@ -407,7 +370,6 @@ def main() -> None:
             args.datetime,
             overwrite_assembled=args.overwrite_assembled,
             overwrite_prepared=args.overwrite_prepared,
-            valid_fraction_threshold=args.valid_fraction_threshold,
             manifest_path=args.manifest,
             quiet=args.quiet,
         )
