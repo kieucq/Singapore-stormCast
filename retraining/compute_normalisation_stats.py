@@ -67,8 +67,8 @@ Output
 Two files are generated automatically from the manifest name and written to
 ``--output-dir``:
 
-    <manifest-prefix>_normalisation.npz
-    <manifest-prefix>_normalisation.csv
+    <manifest-prefix>_normalisation_stats.csv
+    <manifest-prefix>_normalisation_stats.npz
 
 For example:
 
@@ -76,8 +76,8 @@ For example:
 
 produces:
 
-    week_1995_01_normalisation.npz
-    week_1995_01_normalisation.csv
+    week_1995_01_normalisation_stats.npz
+    week_1995_01_normalisation_stats.csv
 
 The NPZ file contains machine-readable arrays for channel names, count, valid
 fraction, mean, standard deviation, raw and normalized extrema, image shape,
@@ -308,15 +308,15 @@ def derive_output_paths(
 
     For example, ``week_1995_01_pairs.csv`` becomes:
 
-    - ``week_1995_01_normalisation.npz``
-    - ``week_1995_01_normalisation.csv``
+    - ``week_1995_01_normalisation_stats.npz``
+    - ``week_1995_01_normalisation_stats.csv``
     """
 
     base_name = manifest_path.stem.removesuffix("_pairs")
 
     return (
-        output_dir / f"{base_name}_normalisation.npz",
-        output_dir / f"{base_name}_normalisation.csv",
+        output_dir / f"{base_name}_normalisation_stats.npz",
+        output_dir / f"{base_name}_normalisation_stats.csv",
     )
 
 
