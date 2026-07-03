@@ -1,10 +1,10 @@
-# SINGV dataset configuration for StormCast.
+# SINGV dataset configuration for the regression smoke test.
 
 name: singv.SINGVDataset
 
 data_root: ~/scratch/retraining
 
-train_manifest: manifests/week_1995_01_pairs.csv
-validation_manifest: manifests/week_1995_01_pairs.csv
+train_manifest: manifests/training_19950101_19950107.csv
+validation_manifest: manifests/training_19950101_19950107.csv
 
-normalisation_path: normalisation_stats/week_1995_01_normalisation_stats.npz
+normalisation_path: normalisation_stats/training_19950101_19950107_normalisation_stats.npz

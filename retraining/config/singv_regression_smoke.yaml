@@ -4,7 +4,7 @@
 # produce a useful trained weather model.
 
 defaults:
-  - dataset/singv
+  - dataset/singv_smoke
   - model/stormcast
   - training/default
   - sampler/edm_deterministic

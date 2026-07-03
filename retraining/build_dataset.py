@@ -14,12 +14,11 @@ The script automatically names the dataset:
 
 For each candidate time ``t``, it:
 
-1. considers the pair ``t -> t + 6 hours``;
+1. considers the pair t -> t + 6 hours;
 2. skips pairs whose input or target falls on a known missing-data date;
-3. calls ``build_pair.build_pair()`` for each remaining pair;
+3. calls build_pair.build_pair() for each remaining pair;
 4. records successful pairs in a CSV manifest;
-5. records skipped pairs in a separate CSV manifest;
-6. reuses completed work when the same command is run again.
+5. reuses completed work when the same command is run again.
 
 Example
 -------
@@ -33,8 +32,7 @@ Build a training range:
 This produces:
 
     ~/scratch/retraining/manifests/
-        training_19950101_19950131_pairs.csv
-        training_19950101_19950131_skipped.csv
+        training_19950101_19950131.csv
 
 Add ``--dry-run`` to preview the work without building states or modifying
 manifest files.
@@ -48,7 +46,7 @@ Notes
   requested range.
 - Pairs therefore do not cross split boundaries.
 - Known missing source files are skipped rather than interpolated.
-- Unexpected missing files are recorded and stop the run.
+- Unexpected missing files stop the run.
 """
 
 from __future__ import annotations
@@ -86,13 +84,6 @@ PAIR_COLUMNS = [
     "input_file",
     "target_time",
     "target_file",
-]
-
-SKIPPED_COLUMNS = [
-    "input_time",
-    "target_time",
-    "category",
-    "reason",
 ]
 
 
@@ -246,34 +237,6 @@ def load_pair_manifest(
     return rows_by_input_time
 
 
-def load_skipped_keys(path: Path) -> set[tuple[str, str, str]]:
-    """Load keys already recorded in the skipped-pair manifest."""
-    if not path.exists():
-        return set()
-
-    keys: set[tuple[str, str, str]] = set()
-
-    with path.open("r", newline="", encoding="utf-8") as file:
-        reader = csv.DictReader(file)
-
-        if reader.fieldnames != SKIPPED_COLUMNS:
-            raise ValueError(
-                f"Unexpected columns in {path}: {reader.fieldnames}; "
-                f"expected {SKIPPED_COLUMNS}."
-            )
-
-        for row in reader:
-            keys.add(
-                (
-                    row["input_time"],
-                    row["target_time"],
-                    row["category"],
-                )
-            )
-
-    return keys
-
-
 def append_csv_row(
     path: Path,
     columns: list[str],
@@ -331,38 +294,6 @@ def manifest_row_is_complete(
     return input_file.is_file() and target_file.is_file()
 
 
-def record_skip(
-    skipped_path: Path,
-    skipped_keys: set[tuple[str, str, str]],
-    *,
-    input_time: datetime,
-    category: str,
-    reason: str,
-) -> None:
-    """Record one skipped pair unless the same skip is already present."""
-    target_time = input_time + PAIR_INTERVAL
-    key = (
-        input_time.isoformat(),
-        target_time.isoformat(),
-        category,
-    )
-
-    if key in skipped_keys:
-        return
-
-    append_csv_row(
-        skipped_path,
-        SKIPPED_COLUMNS,
-        {
-            "input_time": input_time.isoformat(),
-            "target_time": target_time.isoformat(),
-            "category": category,
-            "reason": reason,
-        },
-    )
-    skipped_keys.add(key)
-
-
 def build_dataset(
     dataset_range: DatasetRange,
     *,
@@ -380,13 +311,9 @@ def build_dataset(
     if not dry_run:
         manifest_dir.mkdir(parents=True, exist_ok=True)
 
-    pair_manifest = manifest_dir / f"{dataset_range.name}_pairs.csv"
-    skipped_manifest = (
-        manifest_dir / f"{dataset_range.name}_skipped.csv"
-    )
+    pair_manifest = manifest_dir / f"{dataset_range.name}.csv"
 
     existing_pairs = load_pair_manifest(pair_manifest)
-    skipped_keys = load_skipped_keys(skipped_manifest)
 
     candidate_times = list(
         iter_candidate_input_times(
@@ -406,7 +333,6 @@ def build_dataset(
     )
     print(f"Candidate pairs:   {len(candidate_times)}")
     print(f"Pair manifest:     {pair_manifest}")
-    print(f"Skipped manifest:  {skipped_manifest}")
     print(f"Dry run:           {dry_run}")
 
     for index, input_time in enumerate(candidate_times, start=1):
@@ -421,16 +347,7 @@ def build_dataset(
                 f"Skipping {input_time.isoformat()} -> "
                 f"{target_time.isoformat()}: {known_reason}"
             )
-
-            if not dry_run:
-                record_skip(
-                    skipped_manifest,
-                    skipped_keys,
-                    input_time=input_time,
-                    category="known_missing_daily_file",
-                    reason=known_reason,
-                )
-
+        
             continue
 
         existing_row = existing_pairs.get(input_key)
@@ -480,19 +397,9 @@ def build_dataset(
             )
 
         except FileNotFoundError as error:
-            reason = str(error)
-
-            record_skip(
-                skipped_manifest,
-                skipped_keys,
-                input_time=input_time,
-                category="runtime_missing_file",
-                reason=reason,
-            )
-
             raise RuntimeError(
                 f"Unexpected missing file while building "
-                f"{input_time.isoformat()} -> {target_time.isoformat()}: {reason}"
+                f"{input_time.isoformat()} -> {target_time.isoformat()}: {error}"
             ) from error
 
         row = pair_row(pair)
@@ -529,7 +436,6 @@ def build_dataset(
     print(f"Already complete:         {counts.already_complete}")
     print(f"Skipped known gaps:       {counts.skipped_known}")
     print(f"Pair manifest:            {pair_manifest}")
-    print(f"Skipped manifest:         {skipped_manifest}")
 
     return counts
 
@@ -561,7 +467,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_MANIFEST_DIR,
         help=(
-            "Directory for pair and skipped manifests "
+            "Directory for dataset manifests "
             f"(default: {DEFAULT_MANIFEST_DIR})."
         ),
     )

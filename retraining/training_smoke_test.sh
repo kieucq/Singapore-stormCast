@@ -22,7 +22,7 @@
 #   - retraining/singv.py
 #   - retraining/config/dataset/singv_smoke.yaml
 #   - retraining/config/singv_regression_smoke.yaml
-#   - prepared SINGV data, manifests, and normalisation statistics under
+#   - prepared SINGV data, manifests, and normalisation statisti under
 #     ~/scratch/retraining
 #
 # Outputs:
