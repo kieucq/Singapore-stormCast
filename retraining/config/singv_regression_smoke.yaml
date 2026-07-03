@@ -1,0 +1,51 @@
+# Minimal two-step StormCast regression test using SINGV data.
+#
+# This verifies that the complete training pipeline works. It does not
+# produce a useful trained weather model.
+
+defaults:
+  - dataset/singv
+  - model/stormcast
+  - training/default
+  - sampler/edm_deterministic
+  - hydra/default
+  - _self_
+
+model:
+  regression_conditions: ["state"]
+
+  hyperparameters:
+    model_channels: 32
+    channel_mult: [1, 2, 2, 2]
+    num_blocks: 1
+    attn_resolutions: []
+    bottleneck_attention: false
+    checkpoint_level: 0
+
+training:
+  outdir: /scratch/users/nus/e1155933/retraining/runs
+  experiment_name: singv-regression-smoke
+  run_id: smoke
+  rundir: ${training.outdir}/${training.experiment_name}/${training.run_id}
+
+  num_data_workers: 0
+
+  batch_size: 1
+  batch_size_per_gpu: 1
+
+  total_train_steps: 2
+  lr_rampup_steps: 0
+  clip_grad_norm: 1.0
+
+  print_progress_freq: 1
+  validation_freq: 2
+  checkpoint_freq: 2
+  validation_steps: 1
+
+  validation_plot_variables:
+    - tas
+    - pr
+    - ta_1000
+    - hus_50
+
+  log_to_wandb: false
