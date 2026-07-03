@@ -4,13 +4,13 @@
 # dataset adapter.
 #
 # The script:
-#   1. Links the SINGV adapter and Hydra configurations into the official
-#      StormCast example directory.
+#   1. Links the SINGV adapter and smoke-test Hydra configurations into the
+#      official StormCast example directory.
 #   2. Constructs the dataset and validates one real input-target sample.
 #   3. Prints the final composed Hydra configuration.
 #   4. Runs two training steps and one validation step.
 #
-# This test verifies that data loading, normalization, model construction,
+# This verifies that data loading, normalisation, model construction,
 # training, validation, and checkpoint saving work together. It does not
 # produce a scientifically useful trained model.
 #
@@ -20,16 +20,14 @@
 #
 # Inputs:
 #   - retraining/singv.py
-#   - retraining/config/dataset/singv.yaml
+#   - retraining/config/dataset/singv_smoke.yaml
 #   - retraining/config/singv_regression_smoke.yaml
-#   - prepared SINGV data, manifests, and normalization statistics under
+#   - prepared SINGV data, manifests, and normalisation statistics under
 #     ~/scratch/retraining
 #
 # Outputs:
 #   A timestamped smoke-test run under:
-#   /scratch/users/nus/e1155933/retraining/runs/singv-regression-smoke/
-#
-
+#   ~/scratch/retraining/runs/singv-regression-smoke/
 
 set -euo pipefail
 
@@ -38,23 +36,48 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 STORMCAST_ROOT="$HOME/scratch/physicsnemo-v2.0.0/examples/weather/stormcast"
 
 ADAPTER="$PROJECT_ROOT/retraining/singv.py"
-DATASET_CONFIG="$PROJECT_ROOT/retraining/config/dataset/singv.yaml"
+DATASET_CONFIG="$PROJECT_ROOT/retraining/config/dataset/singv_smoke.yaml"
 SMOKE_CONFIG="$PROJECT_ROOT/retraining/config/singv_regression_smoke.yaml"
 
 RUN_ID="smoke-$(date +%Y%m%d-%H%M%S)"
 
 # ----------------------------------------------------------------------
-# 1. Expose the adapter and configurations to StormCast
+# 1. Check the required files and directories
+# ----------------------------------------------------------------------
+
+for required_file in "$ADAPTER" "$DATASET_CONFIG" "$SMOKE_CONFIG"; do
+  if [[ ! -f "$required_file" ]]; then
+    echo "Missing required file: $required_file" >&2
+    exit 1
+  fi
+done
+
+for required_dir in \
+  "$STORMCAST_ROOT/datasets" \
+  "$STORMCAST_ROOT/config/dataset"
+do
+  if [[ ! -d "$required_dir" ]]; then
+    echo "Missing StormCast directory: $required_dir" >&2
+    exit 1
+  fi
+done
+
+# ----------------------------------------------------------------------
+# 2. Expose the adapter and configurations to StormCast
 # ----------------------------------------------------------------------
 
 ln -sfn "$ADAPTER" "$STORMCAST_ROOT/datasets/singv.py"
-ln -sfn "$DATASET_CONFIG" "$STORMCAST_ROOT/config/dataset/singv.yaml"
-ln -sfn "$SMOKE_CONFIG" "$STORMCAST_ROOT/config/singv_regression_smoke.yaml"
+ln -sfn \
+  "$DATASET_CONFIG" \
+  "$STORMCAST_ROOT/config/dataset/singv_smoke.yaml"
+ln -sfn \
+  "$SMOKE_CONFIG" \
+  "$STORMCAST_ROOT/config/singv_regression_smoke.yaml"
 
 cd "$STORMCAST_ROOT"
 
 # ----------------------------------------------------------------------
-# 2. Verify registration and load one real sample
+# 3. Verify registration and load one real sample
 # ----------------------------------------------------------------------
 
 python - <<'PY'
@@ -63,7 +86,7 @@ from omegaconf import OmegaConf
 from datasets import dataset_classes
 
 
-config = OmegaConf.load("config/dataset/singv.yaml")
+config = OmegaConf.load("config/dataset/singv_smoke.yaml")
 dataset_name = config.name
 
 assert dataset_name in dataset_classes
@@ -92,7 +115,7 @@ print("State shape:", expected_state_shape)
 PY
 
 # ----------------------------------------------------------------------
-# 3. Display the final composed Hydra configuration
+# 4. Display the final composed Hydra configuration
 # ----------------------------------------------------------------------
 
 python train.py \
@@ -101,7 +124,7 @@ python train.py \
   "training.run_id=$RUN_ID"
 
 # ----------------------------------------------------------------------
-# 4. Run the two-step training smoke test
+# 5. Run the two-step training smoke test
 # ----------------------------------------------------------------------
 
 torchrun \
