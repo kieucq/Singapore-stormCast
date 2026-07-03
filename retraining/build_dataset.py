@@ -1,105 +1,43 @@
 #!/usr/bin/env python3
 """
-Build SINGV six-hour training-pair manifests over a date range.
+Build SINGV six-hour input-target pairs over an explicit date range.
 
-This script sits above build_pair.py. For each candidate time t, it:
+The user supplies:
 
-1. considers the pair t -> t + 6 hours;
+- a dataset split: ``training``, ``validation``, or ``testing``;
+- an inclusive start date;
+- an inclusive end date.
+
+The script automatically names the dataset:
+
+    <split>_<start-YYYYMMDD>_<end-YYYYMMDD>
+
+For each candidate time ``t``, it:
+
+1. considers the pair ``t -> t + 6 hours``;
 2. skips pairs whose input or target falls on a known missing-data date;
-3. calls build_pair.build_pair() for every usable pair;
+3. calls ``build_pair.build_pair()`` for each remaining pair;
 4. records successful pairs in a CSV manifest;
 5. records skipped pairs in a separate CSV manifest;
 6. reuses completed work when the same command is run again.
 
-Command structure
------------------
-The general command is:
+Example
+-------
+Build a training range:
 
-    python build_dataset.py MODE [MODE ARGUMENTS] [OPTIONS]
+    python build_dataset.py \
+        --split training \
+        --start-date 1995-01-01 \
+        --end-date 1995-01-31
 
-MODE must be either:
+This produces:
 
-    split
-        Use one of the predefined date ranges listed below.
+    ~/scratch/retraining/manifests/
+        training_19950101_19950131_pairs.csv
+        training_19950101_19950131_skipped.csv
 
-    range
-        Use a custom date range supplied on the command line.
-
-Using split mode
-----------------
-Syntax:
-
-    python build_dataset.py split SPLIT_NAME
-
-Available split names:
-
-    smoke_test
-        1998-02-20 through 1998-02-22.
-        Small end-to-end test containing valid pairs and the known missing
-        uas file on 1998-02-21.
-
-    train
-        1995-01-01 through 2012-12-31.
-
-    validation
-        2013-01-01 through 2013-12-31.
-
-    test
-        2014-01-01 through 2014-12-31.
-
-Examples:
-
-    python build_dataset.py split smoke_test
-    python build_dataset.py split train
-    python build_dataset.py split validation
-    python build_dataset.py split test
-
-Using range mode
-----------------
-Use range mode for a temporary or custom date interval.
-
-Syntax:
-
-    python build_dataset.py range \
-        --name NAME \
-        --start-date YYYY-MM-DD \
-        --end-date YYYY-MM-DD
-
-Example:
-
-    python build_dataset.py range \
-        --name january_2000 \
-        --start-date 2000-01-01 \
-        --end-date 2000-01-31
-
-The --name value is used in the output manifest filenames.
-
-Dry runs
---------
-Add --dry-run to preview what would be built or skipped without creating
-prepared files or changing manifests.
-
-Examples:
-
-    python build_dataset.py split smoke_test --dry-run
-
-    python build_dataset.py range \
-        --name january_2000 \
-        --start-date 2000-01-01 \
-        --end-date 2000-01-31 \
-        --dry-run
-
-Default outputs
----------------
-For a dataset named NAME:
-
-    ~/scratch/retraining/manifests/NAME_pairs.csv
-    ~/scratch/retraining/manifests/NAME_skipped.csv
-
-The pairs manifest records usable input and target prepared files.
-
-The skipped manifest records excluded pairs and the reason each pair was
-excluded.
+Add ``--dry-run`` to preview the work without building states or modifying
+manifest files.
 
 Notes
 -----
@@ -108,22 +46,20 @@ Notes
 - Date ranges are inclusive.
 - A pair is included only when both its input and target lie inside the
   requested range.
-- Pairs therefore do not cross train, validation, or test boundaries.
+- Pairs therefore do not cross split boundaries.
 - Known missing source files are skipped rather than interpolated.
-- An unexpected missing file stops the run after being recorded.
-- Re-running the same command skips pairs that are already complete.
+- Unexpected missing files are recorded and stop the run.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
-import os
 import sys
-from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from typing import Iterable
 
 import build_pair as pair_builder
 
@@ -135,24 +71,7 @@ PAIR_INTERVAL = timedelta(hours=6)
 FIRST_VALID_TIME = time(hour=1)
 LAST_VALID_TIME = time(hour=19)
 
-NAMED_RANGES: dict[str, tuple[date, date]] = {
-    "smoke_test": (
-        date(1998, 2, 20),
-        date(1998, 2, 22),
-    ),
-    "train": (
-        date(1995, 1, 1),
-        date(2012, 12, 31),
-    ),
-    "validation": (
-        date(2013, 1, 1),
-        date(2013, 12, 31),
-    ),
-    "test": (
-        date(2014, 1, 1),
-        date(2014, 12, 31),
-    ),
-}
+DATASET_SPLITS = ("training", "validation", "testing")
 
 # Each listed daily file contains all 24 hourly values for that variable.
 # Therefore all four six-hour states on the affected date are unavailable.
@@ -179,7 +98,7 @@ SKIPPED_COLUMNS = [
 
 @dataclass(frozen=True)
 class DatasetRange:
-    """Resolved name and inclusive UTC date bounds for one dataset run."""
+    """Generated name and inclusive UTC date bounds for one dataset run."""
 
     name: str
     start_date: date
@@ -191,7 +110,6 @@ class BuildCounts:
     """Counters displayed when a dataset run finishes."""
 
     candidates: int = 0
-    planned: int = 0
     built: int = 0
     already_complete: int = 0
     skipped_known: int = 0
@@ -207,46 +125,16 @@ def parse_date(value: str) -> date:
         ) from exc
 
 
-def validate_name(value: str) -> str:
-    """Require a simple filesystem-safe custom dataset name."""
-    if not value:
-        raise argparse.ArgumentTypeError("Dataset name must not be empty.")
+def dataset_name(split: str, start_date: date, end_date: date) -> str:
+    """Generate a consistent dataset name from its split and date range."""
 
-    allowed = set(
-        "abcdefghijklmnopqrstuvwxyz"
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        "0123456789_-"
-    )
-
-    if any(character not in allowed for character in value):
-        raise argparse.ArgumentTypeError(
-            "Dataset name may contain only letters, digits, '-' and '_'."
-        )
-
-    return value
-
-
-def resolve_range(args: argparse.Namespace) -> DatasetRange:
-    """Resolve either a named split or an explicitly supplied date range."""
-    if args.mode == "split":
-        start_date, end_date = NAMED_RANGES[args.split_name]
-        return DatasetRange(
-            name=args.split_name,
-            start_date=start_date,
-            end_date=end_date,
-        )
-
-    return DatasetRange(
-        name=args.name,
-        start_date=args.start_date,
-        end_date=args.end_date,
-    )
+    return f"{split}_{start_date:%Y%m%d}_{end_date:%Y%m%d}"
 
 
 def iter_candidate_input_times(
     start_date: date,
     end_date: date,
-) -> Iterator[datetime]:
+) -> Iterable[datetime]:
     """
     Yield every candidate input time whose target remains inside the range.
 
@@ -391,7 +279,7 @@ def append_csv_row(
     columns: list[str],
     row: dict[str, str],
 ) -> None:
-    """Append and flush one CSV row."""
+    """Append one CSV row."""
     path.parent.mkdir(parents=True, exist_ok=True)
     write_header = not path.exists() or path.stat().st_size == 0
 
@@ -402,8 +290,6 @@ def append_csv_row(
             writer.writeheader()
 
         writer.writerow(row)
-        file.flush()
-        os.fsync(file.fileno())
 
 
 def pair_row(
@@ -475,35 +361,6 @@ def record_skip(
         },
     )
     skipped_keys.add(key)
-
-def should_report_progress(
-    index: int,
-    total: int,
-    progress_every: int,
-) -> bool:
-    """Return whether progress should be printed for this candidate."""
-    return (
-        progress_every > 0
-        and (
-            index % progress_every == 0
-            or index == total
-        )
-    )
-
-
-def print_progress(
-    index: int,
-    total: int,
-    counts: BuildCounts,
-) -> None:
-    """Print one concise dataset-build progress line."""
-    print(
-        f"Progress {index}/{total}: "
-        f"planned={counts.planned}, "
-        f"built={counts.built}, "
-        f"existing={counts.already_complete}, "
-        f"skipped={counts.skipped_known}"
-    )
 
 
 def build_dataset(
@@ -590,21 +447,23 @@ def build_dataset(
         ):
             counts.already_complete += 1
 
-            if should_report_progress(
-                index,
-                len(candidate_times),
-                progress_every,
+            if (
+                progress_every
+                and (
+                    index % progress_every == 0
+                    or index == len(candidate_times)
+                )
             ):
-                print_progress(
-                    index,
-                    len(candidate_times),
-                    counts,
+                print(
+                    f"Progress {index}/{len(candidate_times)}: "
+                    f"built={counts.built}, "
+                    f"existing={counts.already_complete}, "
+                    f"skipped={counts.skipped_known}"
                 )
 
             continue
 
         if dry_run:
-            counts.planned += 1
             print(
                 f"Would build {input_time.isoformat()} -> "
                 f"{target_time.isoformat()}"
@@ -619,8 +478,9 @@ def build_dataset(
                 manifest_path=None,
                 quiet=not verbose,
             )
-        except FileNotFoundError as exc:
-            reason = str(exc)
+
+        except FileNotFoundError as error:
+            reason = str(error)
 
             record_skip(
                 skipped_manifest,
@@ -632,48 +492,40 @@ def build_dataset(
 
             raise RuntimeError(
                 f"Unexpected missing file while building "
-                f"{input_time.isoformat()} -> "
-                f"{target_time.isoformat()}: {reason}"
-            ) from exc
+                f"{input_time.isoformat()} -> {target_time.isoformat()}: {reason}"
+            ) from error
 
         row = pair_row(pair)
 
         if existing_row is None:
-            append_csv_row(
-                pair_manifest,
-                PAIR_COLUMNS,
-                row,
-            )
+            append_csv_row(pair_manifest, PAIR_COLUMNS, row)
             existing_pairs[input_key] = row
         elif existing_row != row:
             raise ValueError(
-                f"Rebuilt pair {input_key} does not match its "
-                f"existing manifest row. Existing: {existing_row}; "
-                f"new: {row}"
+                f"Rebuilt pair {input_key} does not match its existing manifest row. "
+                f"Existing: {existing_row}; new: {row}"
             )
 
         counts.built += 1
 
-        if should_report_progress(
-            index,
-            len(candidate_times),
-            progress_every,
+        if (
+            progress_every
+            and (
+                index % progress_every == 0
+                or index == len(candidate_times)
+            )
         ):
-            print_progress(
-                index,
-                len(candidate_times),
-                counts,
+            print(
+                f"Progress {index}/{len(candidate_times)}: "
+                f"built={counts.built}, "
+                f"existing={counts.already_complete}, "
+                f"skipped={counts.skipped_known}"
             )
 
     print("\nDataset build complete")
     print("----------------------")
     print(f"Candidate pairs:          {counts.candidates}")
-
-    if dry_run:
-        print(f"Would build:              {counts.planned}")
-    else:
-        print(f"Built or revalidated:     {counts.built}")
-
+    print(f"Built or revalidated:     {counts.built}")
     print(f"Already complete:         {counts.already_complete}")
     print(f"Skipped known gaps:       {counts.skipped_known}")
     print(f"Pair manifest:            {pair_manifest}")
@@ -682,10 +534,28 @@ def build_dataset(
     return counts
 
 
-def add_common_arguments(
-    parser: argparse.ArgumentParser,
-) -> None:
-    """Add options shared by named-split and custom-range modes."""
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--split",
+        required=True,
+        choices=DATASET_SPLITS,
+        help="Dataset split being created.",
+    )
+    parser.add_argument(
+        "--start-date",
+        required=True,
+        type=parse_date,
+        help="First UTC date in YYYY-MM-DD format.",
+    )
+    parser.add_argument(
+        "--end-date",
+        required=True,
+        type=parse_date,
+        help="Last UTC date in YYYY-MM-DD format.",
+    )
     parser.add_argument(
         "--manifest-dir",
         type=Path,
@@ -706,9 +576,7 @@ def add_common_arguments(
     parser.add_argument(
         "--overwrite-prepared",
         action="store_true",
-        help=(
-            "Regenerate prepared states while reusing assembled states."
-        ),
+        help="Regenerate prepared states while reusing assembled states.",
     )
     parser.add_argument(
         "--revalidate-existing",
@@ -741,70 +609,30 @@ def add_common_arguments(
         ),
     )
 
+    args = parser.parse_args()
 
-def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    subparsers = parser.add_subparsers(
-        dest="mode",
-        required=True,
-    )
+    if args.start_date > args.end_date:
+        parser.error("--start-date must not be later than --end-date.")
 
-    split_parser = subparsers.add_parser(
-        "split",
-        help="Build one predefined smoke_test/train/validation/test range.",
-    )
-    split_parser.add_argument(
-        "split_name",
-        choices=tuple(NAMED_RANGES),
-        help="Predefined range to build.",
-    )
-    add_common_arguments(split_parser)
+    if args.progress_every < 0:
+        parser.error("--progress-every must be non-negative.")
 
-    range_parser = subparsers.add_parser(
-        "range",
-        help="Build an explicitly supplied inclusive date range.",
-    )
-    range_parser.add_argument(
-        "--name",
-        required=True,
-        type=validate_name,
-        help="Filesystem-safe name used for output manifests.",
-    )
-    range_parser.add_argument(
-        "--start-date",
-        required=True,
-        type=parse_date,
-        help="First UTC date in YYYY-MM-DD format.",
-    )
-    range_parser.add_argument(
-        "--end-date",
-        required=True,
-        type=parse_date,
-        help="Last UTC date in YYYY-MM-DD format.",
-    )
-    add_common_arguments(range_parser)
-
-    return parser.parse_args()
+    return args
 
 
 def main() -> None:
     """Command-line entry point."""
+
     args = parse_args()
-
-    if args.progress_every < 0:
-        raise ValueError("--progress-every must be non-negative.")
-
-    dataset_range = resolve_range(args)
-
-    if dataset_range.start_date > dataset_range.end_date:
-        raise ValueError(
-            "--start-date must not be later than --end-date."
-        )
+    requested_range = DatasetRange(
+        name=dataset_name(args.split, args.start_date, args.end_date),
+        start_date=args.start_date,
+        end_date=args.end_date,
+    )
 
     try:
         build_dataset(
-            dataset_range,
+            requested_range,
             manifest_dir=args.manifest_dir,
             overwrite_assembled=args.overwrite_assembled,
             overwrite_prepared=args.overwrite_prepared,
@@ -818,8 +646,8 @@ def main() -> None:
         RuntimeError,
         ValueError,
         OSError,
-    ) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+    ) as error:
+        print(f"Error: {error}", file=sys.stderr)
         sys.exit(1)
 
 
