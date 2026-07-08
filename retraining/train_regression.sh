@@ -54,8 +54,6 @@ ln -sfn \
 
 cd "$STORMCAST_DIR"
 
-cd "$STORMCAST_DIR"
-
 echo "Resolved configuration"
 echo "======================"
 python train.py \
