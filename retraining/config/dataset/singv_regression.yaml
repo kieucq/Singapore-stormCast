@@ -1,0 +1,10 @@
+# SINGV dataset used for the two-year regression training run.
+
+name: singv.SINGVDataset
+
+data_root: ~/scratch/retraining
+
+train_manifest: manifests/training_19950101_19961231.csv
+validation_manifest: manifests/validation_19970101_19970430.csv
+
+normalisation_path: normalisation_stats/training_19950101_19961231_normalisation_stats.npz
