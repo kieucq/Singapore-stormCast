@@ -4,13 +4,15 @@
 #
 # Basic usage:
 #
-#   bash retraining/submit_job.sh JOB_NAME TARGET_SCRIPT
+#   bash submit_job.sh JOB_NAME TARGET_SCRIPT [TARGET_ARGUMENTS...]
 #
 # Example:
 #
 #   bash retraining/submit_job.sh \
-#     prepare-regression \
-#     retraining/prepare_regression_data.sh
+#     prepare-data \
+#     retraining/prepare_data.sh \
+#     1995-01-01 1995-01-31 \
+#     1995-02-01 1995-02-07
 #
 # Resource defaults:
 #
@@ -64,13 +66,15 @@ usage() {
 Submit a shell script as a non-interactive PBS job on ASPIRE2A.
 
 Usage:
-  submit_job.sh JOB_NAME TARGET_SCRIPT
+  submit_job.sh JOB_NAME TARGET_SCRIPT [TARGET_ARGUMENTS...]
   submit_job.sh --help
 
 Example:
   bash retraining/submit_job.sh \
-    prepare-regression \
-    retraining/prepare_regression_data.sh
+    prepare-data \
+    retraining/prepare_data.sh \
+    1995-01-01 1995-01-31 \
+    1995-02-01 1995-02-07
 
 Default resources:
   PROJECT=17001770
@@ -83,8 +87,10 @@ Default resources:
 Override resources:
   WALLTIME=12:00:00 NCPUS=8 MEM=96G \
   bash retraining/submit_job.sh \
-    prepare-regression \
-    retraining/prepare_regression_data.sh
+    prepare-data \
+    retraining/prepare_data.sh \
+    1995-01-01 1995-01-31 \
+    1995-02-01 1995-02-07
 
 Useful commands after submission:
   qstat -u "$USER"       List your jobs
@@ -98,12 +104,7 @@ EOF
 }
 
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-    usage
-    exit 0
-fi
-
-if [[ $# -ne 2 ]]; then
+if [[ $# -lt 2 ]]; then
     echo "Error: expected a job name and target script." >&2
     echo >&2
     usage >&2
@@ -113,6 +114,19 @@ fi
 
 JOB_NAME="$1"
 TARGET_SCRIPT="$(realpath "$2")"
+
+shift 2
+TARGET_ARGS=("$@")
+
+# Store the complete command as a Bash array so arguments containing spaces
+# or special characters remain correctly quoted in the submitted job.
+TARGET_COMMAND=(
+    bash
+    "$TARGET_SCRIPT"
+    "${TARGET_ARGS[@]}"
+)
+
+TARGET_COMMAND_DECL="$(declare -p TARGET_COMMAND)"
 
 if [[ ! -f "$TARGET_SCRIPT" ]]; then
     echo "Error: target script does not exist:" >&2
@@ -153,6 +167,7 @@ echo "Submitting PBS job"
 echo "------------------"
 echo "Job name:      $JOB_NAME"
 echo "Target script: $TARGET_SCRIPT"
+echo "Arguments:     ${TARGET_ARGS[*]:-(none)}"
 echo "Project root:  $PROJECT_ROOT"
 echo "Project:       $PROJECT"
 echo "Queue:         $QUEUE"
@@ -189,10 +204,17 @@ echo "Job ID:     \$PBS_JOBID"
 echo "Host:       \$(hostname)"
 echo "Started:    \$(date)"
 echo "Working dir: \$(pwd)"
-echo "Script:     $TARGET_SCRIPT"
+echo "Script:      $TARGET_SCRIPT"
+echo "Arguments:   ${TARGET_ARGS[*]:-(none)}"
 echo
 
-bash "$TARGET_SCRIPT"
+$TARGET_COMMAND_DECL
+
+echo "Command:"
+printf '  %q' "\${TARGET_COMMAND[@]}"
+printf '\n\n'
+
+"\${TARGET_COMMAND[@]}"
 
 echo
 echo "Job completed successfully."

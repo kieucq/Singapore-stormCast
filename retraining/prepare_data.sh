@@ -12,8 +12,8 @@
 # Example:
 #
 #   bash retraining/prepare_data.sh \
-#     1995-01-01 1995-01-31 \
-#     1995-02-01 1995-02-07
+#     1995-01-01 1996-12-31 \
+#     1997-01-01 1997-04-30
 #
 
 set -euo pipefail
@@ -30,12 +30,12 @@ Dates must use YYYY-MM-DD format.
 
 Example:
   bash retraining/prepare_data.sh \
-    1995-01-01 1995-01-31 \
-    1995-02-01 1995-02-07
+    1995-01-01 1996-12-31 \
+    1997-01-01 1997-04-30
 
 The script:
-  1. builds the requested training dataset;
-  2. builds the requested validation dataset;
+  1. builds or resumes the requested training dataset;
+  2. builds or resumes the requested validation dataset;
   3. computes normalisation statistics from the training dataset only.
 EOF
 }
@@ -59,27 +59,11 @@ TRAIN_END="$2"
 VALIDATION_START="$3"
 VALIDATION_END="$4"
 
-DATE_PATTERN='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
-
-for DATE_VALUE in \
-    "$TRAIN_START" \
-    "$TRAIN_END" \
-    "$VALIDATION_START" \
-    "$VALIDATION_END"
-do
-    if [[ ! "$DATE_VALUE" =~ $DATE_PATTERN ]]; then
-        echo "Error: invalid date format: $DATE_VALUE" >&2
-        echo "Expected YYYY-MM-DD." >&2
-        exit 2
-    fi
-done
-
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_ROOT="${DATA_ROOT:-$HOME/scratch/retraining}"
 
 
-# Validate the dates before beginning any expensive work.
+# Validate all dates before beginning expensive processing.
 python - \
     "$TRAIN_START" \
     "$TRAIN_END" \
@@ -88,9 +72,12 @@ python - \
 import sys
 from datetime import date
 
-train_start, train_end, validation_start, validation_end = (
-    date.fromisoformat(value) for value in sys.argv[1:]
-)
+try:
+    train_start, train_end, validation_start, validation_end = (
+        date.fromisoformat(value) for value in sys.argv[1:]
+    )
+except ValueError as error:
+    raise SystemExit(f"Error: invalid date: {error}")
 
 if train_start > train_end:
     raise SystemExit(
@@ -128,13 +115,16 @@ NORMALISATION_CSV="$DATA_ROOT/normalisation_stats/${TRAIN_NAME}_normalisation_st
 
 echo "SINGV DATA PREPARATION"
 echo "======================"
-echo "Training:        $TRAIN_START through $TRAIN_END"
-echo "Validation:      $VALIDATION_START through $VALIDATION_END"
-echo "Data root:       $DATA_ROOT"
+echo "Training dates:     $TRAIN_START through $TRAIN_END"
+echo "Validation dates:   $VALIDATION_START through $VALIDATION_END"
+echo "Data root:          $DATA_ROOT"
+echo "Training manifest:  $TRAIN_MANIFEST"
+echo "Validation manifest: $VALIDATION_MANIFEST"
 echo
 
 
-echo "Building training dataset..."
+echo "STAGE 1: BUILDING TRAINING DATASET"
+echo "=================================="
 
 python "$SCRIPT_DIR/build_dataset.py" \
     --split training \
@@ -143,7 +133,8 @@ python "$SCRIPT_DIR/build_dataset.py" \
 
 
 echo
-echo "Building validation dataset..."
+echo "STAGE 2: BUILDING VALIDATION DATASET"
+echo "===================================="
 
 python "$SCRIPT_DIR/build_dataset.py" \
     --split validation \
@@ -151,16 +142,43 @@ python "$SCRIPT_DIR/build_dataset.py" \
     --end-date "$VALIDATION_END"
 
 
+if [[ ! -f "$TRAIN_MANIFEST" ]]; then
+    echo "Error: training manifest was not created:" >&2
+    echo "  $TRAIN_MANIFEST" >&2
+    exit 1
+fi
+
+if [[ ! -f "$VALIDATION_MANIFEST" ]]; then
+    echo "Error: validation manifest was not created:" >&2
+    echo "  $VALIDATION_MANIFEST" >&2
+    exit 1
+fi
+
+
 echo
-echo "Computing training normalisation statistics..."
+echo "STAGE 3: COMPUTING TRAINING NORMALISATION STATISTICS"
+echo "===================================================="
 
 python "$SCRIPT_DIR/compute_normalisation_stats.py" \
     "$TRAIN_MANIFEST"
 
 
+if [[ ! -f "$NORMALISATION_NPZ" ]]; then
+    echo "Error: normalisation NPZ was not created:" >&2
+    echo "  $NORMALISATION_NPZ" >&2
+    exit 1
+fi
+
+if [[ ! -f "$NORMALISATION_CSV" ]]; then
+    echo "Error: normalisation summary CSV was not created:" >&2
+    echo "  $NORMALISATION_CSV" >&2
+    exit 1
+fi
+
+
 echo
-echo "Data preparation complete"
-echo "-------------------------"
+echo "DATA PREPARATION COMPLETE"
+echo "========================="
 echo "Training manifest:"
 echo "  $TRAIN_MANIFEST"
 echo
