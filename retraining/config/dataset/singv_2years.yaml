@@ -1,6 +1,6 @@
 # SINGV dataset used for the two-year regression training run.
 
-name: singv.SINGVDataset
+name: regression_dataset_adapter.RegressionDatasetAdapter
 
 data_root: ~/scratch/retraining
 

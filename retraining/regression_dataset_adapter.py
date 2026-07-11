@@ -127,7 +127,7 @@ def _read_manifest(path: Path, data_root: Path) -> tuple[PairRecord, ...]:
     return tuple(records)
 
 
-class SINGVDataset(StormCastDataset):
+class RegressionDatasetAdapter(StormCastDataset):
     """Load normalized SINGV input-target pairs for StormCast."""
 
     lead_time_steps = 0

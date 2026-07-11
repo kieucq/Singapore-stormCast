@@ -8,7 +8,7 @@ For a requested input time t, this script:
 2. prepares both states as 75-channel 624 x 624 NetCDF files;
 3. reuses existing assembled and prepared files unless overwriting is requested;
 4. verifies that the prepared files form a valid six-hour pair;
-5. optionally records the pair in a CSV manifest.
+5. optionally records the pair in a CSV manifest. (correction for later: hold on, this isn't actually optional now is it)
 
 Example
 -------
