@@ -41,8 +41,8 @@ mkdir -p \
     "$STORMCAST_DIR/config/dataset"
 
 ln -sfn \
-    "$SCRIPT_DIR/singv.py" \
-    "$STORMCAST_DIR/datasets/singv.py"
+    "$SCRIPT_DIR/regression_dataset_adapter.py" \
+    "$STORMCAST_DIR/datasets/regression_dataset_adapter.py"
 
 ln -sfn \
     "$DATASET_CONFIG" \
