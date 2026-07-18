@@ -1,4 +1,4 @@
-"""SINGV dataset adapter for state-only six-hour StormCast regression.
+"""SINGV dataset adapter for state-only StormCast regression.
 
 The adapter reads input-target pairs from a CSV manifest, loads prepared SINGV
 states, applies training-set normalization, fills masked cells with zero, and
@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -36,14 +36,15 @@ from datasets.dataset import StormCastDataset
 
 EXPECTED_COLUMNS = ("input_time", "input_file", "target_time", "target_file")
 EXPECTED_STATE_DIMS = ("time", "channel", "y", "x")
-EXPECTED_LEAD_TIME = timedelta(hours=6)
 DEFAULT_DATA_ROOT = "~/scratch/retraining"
 
 
 @dataclass(frozen=True)
 class PairRecord:
-    """One six-hour input-target pair."""
+    """One input-target pair."""
 
+    input_time: datetime
+    target_time: datetime
     input_path: Path
     target_path: Path
 
@@ -78,7 +79,7 @@ def _parse_time(value: str, row_number: int, column: str) -> datetime:
 
 
 def _read_manifest(path: Path, data_root: Path) -> tuple[PairRecord, ...]:
-    """Read and validate a six-hour pair manifest."""
+    """Read and validate an input-target pair manifest."""
 
     records: list[PairRecord] = []
 
@@ -109,13 +110,15 @@ def _read_manifest(path: Path, data_root: Path) -> tuple[PairRecord, ...]:
 
             input_time = _parse_time(values["input_time"], row_number, "input_time")
             target_time = _parse_time(values["target_time"], row_number, "target_time")
-            if target_time - input_time != EXPECTED_LEAD_TIME:
+            if target_time <= input_time:
                 raise ValueError(
-                    f"Manifest row {row_number} does not describe a six-hour pair."
+                    f"Manifest row {row_number} must have target_time after input_time."
                 )
 
             records.append(
                 PairRecord(
+                    input_time=input_time,
+                    target_time=target_time,
                     input_path=_resolve_path(values["input_file"], data_root),
                     target_path=_resolve_path(values["target_file"], data_root),
                 )
@@ -123,6 +126,16 @@ def _read_manifest(path: Path, data_root: Path) -> tuple[PairRecord, ...]:
 
     if not records:
         raise ValueError(f"Manifest contains no data rows: {path}")
+    
+    lead_times = {
+        record.target_time - record.input_time
+        for record in records
+    }
+
+    if len(lead_times) != 1:
+        raise ValueError(
+            f"Manifest contains inconsistent forecast intervals: {path}"
+        )
 
     return tuple(records)
 
@@ -266,7 +279,7 @@ class RegressionDatasetAdapter(StormCastDataset):
         return normalized, valid.astype(np.float32)
 
     def __len__(self) -> int:
-        """Return the number of six-hour pairs."""
+        """Return the number of input-target pairs."""
 
         return len(self._records)
 
@@ -347,3 +360,24 @@ class RegressionDatasetAdapter(StormCastDataset):
         x = np.asarray(x, dtype=np.float32)
         mean, std = self._state_statistics_for(x)
         return x * std + mean
+
+    def index_for_time(self, input_time: datetime) -> int:
+        """Return the manifest index corresponding to an input time."""
+
+        for index, record in enumerate(self._records):
+            if record.input_time == input_time:
+                return index
+
+        raise ValueError(
+            f"No dataset sample begins at {input_time.isoformat()}."
+        )
+
+    def input_time(self, index: int) -> datetime:
+        """Return the input time for one sample."""
+
+        return self._records[index].input_time
+
+    def target_time(self, index: int) -> datetime:
+        """Return the target time for one sample."""
+
+        return self._records[index].target_time

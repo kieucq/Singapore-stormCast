@@ -719,7 +719,7 @@ class Trainer:
                     for i, ch in enumerate(self.state_channels)
                 }
 
-            loss_value = loss.sum() / len(self.state_channels)
+            loss_value = loss.sum() / len(self.state_channels) / self.num_accumulation_rounds
             loss_value.backward()
 
         # Gradient clipping

@@ -130,22 +130,33 @@ def inference_plot(
         im = ax[1].imshow(state_true, origin="lower", cmap="magma")
     fig.colorbar(im, ax=ax[1], fraction=0.046, pad=0.04)
     ax[1].set_title("Actual, {}".format(plot_var_state))
-    if plot_var_background in color_limits:
-        im = ax[2].imshow(
-            background,
-            origin="lower",
-            cmap="magma",
-            clim=color_limits[plot_var_background],
-        )
+    if background is None:
+        ax[2].axis("off")
+        ax[2].set_title("Background: none")
     else:
-        im = ax[2].imshow(
-            background,
-            origin="lower",
-            cmap="magma",
+        if plot_var_background in color_limits:
+            im = ax[2].imshow(
+                background,
+                origin="lower",
+                cmap="magma",
+                clim=color_limits[plot_var_background],
+            )
+        else:
+            im = ax[2].imshow(
+                background,
+                origin="lower",
+                cmap="magma",
+            )
+
+        fig.colorbar(
+            im,
+            ax=ax[2],
+            fraction=0.046,
+            pad=0.04,
         )
-    fig.colorbar(im, ax=ax[2], fraction=0.046, pad=0.04)
-    ax[2].set_title("Background, {}".format(plot_var_background))
-    maxerror = np.max(np.abs(state_error))
+        ax[2].set_title(f"Background, {plot_var_background}")
+
+    maxerror = np.nanmax(np.abs(state_error))
     im = ax[3].imshow(
         state_error,
         origin="lower",

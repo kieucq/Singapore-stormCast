@@ -14,10 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import numpy as np
 import matplotlib.pyplot as plt
 import torch
 from datetime import datetime
-import pandas as pd
 import hydra
 from physicsnemo.distributed import DistributedManager
 from omegaconf import DictConfig
@@ -49,7 +49,6 @@ def main(cfg: DictConfig):
 
     background_channels = dataset.background_channels()
     state_channels = dataset.state_channels()
-    lead_time_steps = dataset.lead_time_steps
 
     invariant_array = dataset.get_invariants()
 
@@ -76,18 +75,23 @@ def main(cfg: DictConfig):
         for i, background_channel in enumerate(background_channels)
     }
 
-    hours_since_jan_01 = int(
-        (initial_time - datetime(initial_time.year, 1, 1, 0, 0)).total_seconds() / 3600
-    )
-
     # Load pretrained models
     if "regression" in cfg.model.diffusion_conditions:
-        net = Module.from_checkpoint(cfg.inference.regression_checkpoint)
-        regression_model = net.to(device)
+        regression_model = (
+            Module.from_checkpoint(cfg.inference.regression_checkpoint)
+            .eval()
+            .requires_grad_(False)
+            .to(device)
+        )
     else:
         regression_model = None
-    net = Module.from_checkpoint(cfg.inference.diffusion_checkpoint)
-    diffusion_model = net.to(device)
+
+    diffusion_model = (
+        Module.from_checkpoint(cfg.inference.diffusion_checkpoint)
+        .eval()
+        .requires_grad_(False)
+        .to(device)
+    )
 
     # initialize zarr
     (
@@ -99,9 +103,27 @@ def main(cfg: DictConfig):
         dataset, cfg.inference.rundir, output_state_channels, n_steps
     )
 
+    start_index = dataset.index_for_time(initial_time)
+
+    if start_index + n_steps > len(dataset):
+        raise ValueError(
+            "Requested forecast extends beyond the dataset manifest."
+        )
+
+    state_pred = None
+    forecast_mask = None
+    val_times = []
+
     with torch.no_grad():
         for i in range(n_steps):
-            data = dataset[i + hours_since_jan_01]
+            data_index = start_index + i
+
+            if i > 0 and dataset.input_time(data_index) != val_times[-1]:
+                raise ValueError(
+                    "Selected manifest rows are not contiguous in time."
+                )
+                
+            data = dataset[data_index]
 
             background = torch.as_tensor(
                 data["background"],
@@ -133,31 +155,80 @@ def main(cfg: DictConfig):
                 device=device,
             ).unsqueeze(0)
 
-            if i == 0:
+            if state_pred is None:
                 state_pred = input_state
-                state_pred_edm = state_pred.clone()
-                state_pred_noedm = state_pred.clone()
+                forecast_mask = input_mask.clone() # input mask is used throughout autoregressive rollout
 
-                lead_time_label = data.get("lead_time_label")
-                if lead_time_label is not None:
-                    lead_time_label = torch.as_tensor(
-                        lead_time_label,
-                        dtype=torch.int64,
-                        device=device,
-                    ).unsqueeze(0)
+            lead_time_label = data.get("lead_time_label")
+            if lead_time_label is not None:
+                lead_time_label = torch.as_tensor(
+                    lead_time_label,
+                    dtype=torch.int64,
+                    device=device,
+                ).unsqueeze(0)
 
-            assert (
-                state_pred_edm.shape == (1, len(state_channels)) + dataset.image_shape()
+            # Build the diffusion condition and generate the regression forecast.
+            (condition, _, regression_output) = build_network_condition_and_target(
+                background,
+                (state_pred, state_pred),
+                invariant_tensor,
+                lead_time_label=lead_time_label,
+                regression_net=regression_model,
+                condition_list=cfg.model.diffusion_conditions,
+                regression_condition_list=cfg.model.regression_conditions,
+                regression_mask=forecast_mask,
             )
-            assert (
-                state_pred_noedm.shape
-                == (1, len(state_channels)) + dataset.image_shape()
+
+            if regression_output is None:  # in case of no regression model
+                regression_output = torch.zeros_like(state_pred)
+
+            regression_output = regression_output.masked_fill(
+                forecast_mask == 0,
+                0.0,
             )
-            # write zarr
+
+            state_pred_noedm = regression_output.clone()
+
+            diffusion_correction = diffusion_model_forward(
+                diffusion_model,
+                condition,
+                regression_output.shape,
+                sampler_args=dict(cfg.sampler.args),
+                lead_time_label=lead_time_label,
+            )
+
+            state_pred = regression_output + diffusion_correction.float()
+
+            state_pred = state_pred.masked_fill(
+                forecast_mask == 0,
+                0.0,
+            )
+
+            state_pred_edm = state_pred.clone()
+
+            denorm_pred_edm = dataset.denormalize_state(
+                state_pred_edm.cpu().numpy()
+            )[0]
+
+            denorm_pred_noedm = dataset.denormalize_state(
+                state_pred_noedm.cpu().numpy()
+            )[0]
+
+            denorm_target = dataset.denormalize_state(
+                target_state.cpu().numpy()
+            )[0]
+
+            forecast_valid = forecast_mask.cpu().numpy()[0].astype(bool)
+            target_valid = target_mask.cpu().numpy()[0].astype(bool)
+
+            denorm_pred_edm[~forecast_valid] = np.nan
+            denorm_pred_noedm[~forecast_valid] = np.nan
+            denorm_target[~target_valid] = np.nan
+
             write_inference_results_zarr(
-                dataset.denormalize_state(state_pred_edm.cpu().numpy())[0],
-                dataset.denormalize_state(state_pred_noedm.cpu().numpy())[0],
-                dataset.denormalize_state(data["state"][0].cpu().numpy())[0],
+                denorm_pred_edm,
+                denorm_pred_noedm,
+                denorm_target,
                 edm_prediction_group,
                 noedm_prediction_group,
                 target_group,
@@ -166,74 +237,45 @@ def main(cfg: DictConfig):
                 i,
             )
 
-            # build diffusion condition and inference regression model, placing output into state_pred
-            (condition, _, state_pred) = build_network_condition_and_target(
-                background,
-                [state_pred, state_pred],
-                invariant_tensor,
-                lead_time_label=lead_time_label,
-                regression_net=regression_model,
-                condition_list=cfg.model.diffusion_conditions,
-                regression_condition_list=cfg.model.regression_conditions,
-                regression_mask=input_mask,
+            valid_time = dataset.target_time(data_index)
+            val_times.append(valid_time)
+
+            forecast_hour = int(
+                (valid_time - initial_time).total_seconds() / 3600
             )
-
-            if state_pred is None:  # in case of no regression model
-                state_pred = torch.zeros_like(state_pred_edm)
-
-            if target_mask is not None:
-                state_pred = state_pred.masked_fill(
-                    target_mask == 0,
-                    0.0,
-                )
-
-            state_pred_noedm = state_pred.clone()
-
-            edm_corrected_outputs = diffusion_model_forward(
-                diffusion_model,
-                condition,
-                state_pred.shape,
-                sampler_args=dict(cfg.sampler.args),
-                lead_time_label=lead_time_label,
-            )
-
-            state_pred = state_pred + edm_corrected_outputs.float()
-
-            if target_mask is not None:
-                state_pred = state_pred.masked_fill(
-                    target_mask == 0,
-                    0.0,
-                )
-
-            state_pred_edm = state_pred.clone()
 
             varidx_state = vardict_state[cfg.inference.plot_var_state]
-            varidx_background = vardict_background[cfg.inference.plot_var_background]
 
-            background_arr = background.cpu().numpy()[0]
-            state_true_arr = target_state.cpu().numpy()[0]
-            state_pred_arr = state_pred.cpu().numpy()[0]
+            plot_var_background = cfg.inference.get(
+                "plot_var_background",
+                None,
+            )
 
-            background_arr = dataset.denormalize_background(background_arr)
-            state_true_arr = dataset.denormalize_state(state_true_arr)
-            state_pred_arr = dataset.denormalize_state(state_pred_arr)
+            if background_channels and plot_var_background is not None:
+                background_arr = dataset.denormalize_background(
+                    background.cpu().numpy()[0]
+                )
 
+                varidx_background = vardict_background[
+                    plot_var_background
+                ]
+                background_plot = background_arr[varidx_background]
+            else:
+                background_plot = None
             fig = inference_plot(
-                background_arr[varidx_background],
-                state_pred_arr[varidx_state],
-                state_true_arr[varidx_state],
-                cfg.inference.plot_var_background,
+                background_plot,
+                denorm_pred_edm[varidx_state],
+                denorm_target[varidx_state],
+                plot_var_background,
                 cfg.inference.plot_var_state,
                 initial_time,
-                i,
+                forecast_hour,
             )
-            fig.savefig(f"{cfg.inference.rundir}/out_{i}.png")
-            plt.close(fig)
 
-    initial_time_pd = pd.to_datetime(initial_time)
-    val_times = []
-    for i in range(n_steps):
-        val_times.append(initial_time_pd + pd.Timedelta(seconds=i * hours_since_jan_01))
+            fig.savefig(
+                f"{cfg.inference.rundir}/out_{forecast_hour}h.png"
+            )
+            plt.close(fig)
 
     save_inference_results_netcdf(
         ds_out_path=cfg.inference.rundir,
