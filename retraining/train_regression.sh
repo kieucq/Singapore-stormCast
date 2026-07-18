@@ -19,10 +19,11 @@ fi
 CONFIG_NAME="$1"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-STORMCAST_DIR="$HOME/scratch/physicsnemo-v2.0.0/examples/weather/stormcast"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+STORMCAST_DIR="$REPO_ROOT/stormcast"
 
-DATASET_CONFIG_DIR="$SCRIPT_DIR/config/dataset"
-DATASET_ADAPTER="$SCRIPT_DIR/regression_dataset_adapter.py"
+TRAINING_CONFIG="$STORMCAST_DIR/config/${CONFIG_NAME}.yaml"
+
 TRAINING_CONFIG="$SCRIPT_DIR/config/${CONFIG_NAME}.yaml"
 
 if [[ ! -d "$DATASET_CONFIG_DIR" ]]; then
@@ -46,12 +47,6 @@ fi
 mkdir -p \
     "$STORMCAST_DIR/datasets" \
     "$STORMCAST_DIR/config/dataset"
-
-ln -sfn \
-    "$DATASET_ADAPTER" \
-    "$STORMCAST_DIR/datasets/regression_dataset_adapter.py"
-
-shopt -s nullglob
 
 for DATASET_CONFIG in "$DATASET_CONFIG_DIR"/*.yaml; do
     ln -sfn \
