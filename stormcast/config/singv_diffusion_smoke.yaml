@@ -1,0 +1,81 @@
+# Minimal end-to-end SINGV diffusion training smoke test.
+#
+# Verifies:
+# - loading the SINGV dataset;
+# - loading and freezing the trained regression model;
+# - constructing regression residual targets;
+# - diffusion forward and backward passes;
+# - validation sampling;
+# - plotting and checkpoint saving.
+#
+# This does not produce a scientifically useful diffusion model.
+
+defaults:
+  - dataset/singv_10years
+  - model/stormcast
+  - training/default
+  - sampler/edm_deterministic
+  - hydra/default
+  - _self_
+
+model:
+  model_name: diffusion
+
+  # The completed regression model was trained using state only.
+  regression_conditions:
+    - state
+
+  # Diffusion receives the current state and frozen regression forecast.
+  diffusion_conditions:
+    - state
+    - regression
+
+  regression_weights: /scratch/users/nus/e1155933/retraining/runs/singv-regression-10years/training-100000steps/checkpoints_regression/StormCastUNet.0.100000.mdlus
+
+  spatial_pos_embed: false
+
+  # Keep the smoke-test architecture deliberately small.
+  hyperparameters:
+    model_channels: 32
+    channel_mult: [1, 2, 2, 2]
+    num_blocks: 1
+    attn_resolutions: []
+    bottleneck_attention: false
+    checkpoint_level: 0
+
+training:
+  outdir: /scratch/users/nus/e1155933/retraining/runs
+  experiment_name: singv-diffusion-smoke
+  run_id: smoke
+  rundir: ${training.outdir}/${training.experiment_name}/${training.run_id}
+
+  num_data_workers: 0
+
+  batch_size: 1
+  batch_size_per_gpu: 1
+
+  total_train_steps: 2
+  lr_rampup_steps: 0
+  clip_grad_norm: 1.0
+
+  print_progress_freq: 1
+  validation_freq: 2
+  checkpoint_freq: 2
+  validation_steps: 1
+
+  validation_plot_variables:
+    - tas
+    - pr
+    - ta_850
+    - hus_850
+
+  log_to_wandb: false
+
+  loss:
+    type: edm
+
+# The normal sampler uses 18 steps. Two are sufficient to verify that
+# validation sampling executes during a smoke test.
+sampler:
+  args:
+    num_steps: 2
