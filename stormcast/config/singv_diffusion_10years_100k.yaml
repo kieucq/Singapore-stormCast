@@ -45,12 +45,12 @@ model:
 training:
   outdir: /scratch/users/nus/e1155933/retraining/runs
   experiment_name: singv-diffusion-10years
-  run_id: training-100000steps
+  run_id: training-100000steps-bf16-compile
   rundir: ${training.outdir}/${training.experiment_name}/${training.run_id}
 
   # Retain the conservative loader configuration used by the
   # successful regression and diffusion smoke-test runs.
-  num_data_workers: 0
+  num_data_workers: 4
 
   batch_size: 1
   batch_size_per_gpu: 1
@@ -69,6 +69,13 @@ training:
   checkpoint_freq: 1000
   validation_freq: 1000
   validation_steps: 1
+
+  perf:
+    fp_optimizations: amp-bf16
+    torch_compile: true
+    use_apex_gn: false
+    allow_tf32: true
+    allow_fp16_reduced_precision: false
 
   validation_plot_variables:
     - tas
