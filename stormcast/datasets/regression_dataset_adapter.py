@@ -274,7 +274,9 @@ class RegressionDatasetAdapter(StormCastDataset):
         """Return one normalized StormCast sample."""
 
         record = self._records[index]
-        input_state, _ = self._normalize_and_fill(self._load_state(record.input_path))
+        input_state, input_mask = self._normalize_and_fill(
+            self._load_state(record.input_path)
+        )
         target_state, target_mask = self._normalize_and_fill(
             self._load_state(record.target_path)
         )
@@ -282,7 +284,8 @@ class RegressionDatasetAdapter(StormCastDataset):
         return {
             "background": np.empty((0, *self._image_shape), dtype=np.float32),
             "state": (input_state, target_state),
-            "mask": target_mask,
+            "input_mask": input_mask,
+            "target_mask": target_mask,
         }
 
     def background_channels(self) -> list[str]:

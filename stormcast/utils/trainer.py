@@ -678,7 +678,7 @@ class Trainer:
         for _ in range(self.num_accumulation_rounds):
             batch = next(self.dataset_iterator)
             mem_format = self.memory_format
-            background, state, mask, lead_time_label = unpack_batch(
+            background, state, input_mask, target_mask, lead_time_label = unpack_batch(
                 batch, self.device, memory_format=mem_format
             )
 
@@ -691,7 +691,12 @@ class Trainer:
                     regression_net=self.regression_net,
                     condition_list=self.condition_list,
                     regression_condition_list=self.cfg.model.regression_conditions,
+                    regression_mask=input_mask,
                 )
+
+                if target_mask is not None:
+                    target = target.masked_fill(target_mask == 0, 0.0)
+                
                 # Only pass lead_time_label if the model supports it
                 loss_kwargs = {}
                 if lead_time_label is not None:
@@ -704,8 +709,8 @@ class Trainer:
                     **loss_kwargs,
                 )
 
-                if mask is not None:
-                    loss = loss * mask
+                if target_mask is not None:
+                    loss = loss * target_mask
 
             if self.log_to_wandb:
                 channelwise_loss = loss.mean(dim=(0, 2, 3))
@@ -787,7 +792,7 @@ class Trainer:
             for v_i in range(self.validation_steps):
                 batch = next(valid_iter)
                 mem_format = self.memory_format
-                background, state, mask, lead_time_label = unpack_batch(
+                background, state, input_mask, target_mask, lead_time_label = unpack_batch(
                     batch, self.device, memory_format=mem_format
                 )
 
@@ -802,7 +807,11 @@ class Trainer:
                         regression_net=self.regression_net,
                         condition_list=self.condition_list,
                         regression_condition_list=self.cfg.model.regression_conditions,
+                        regression_mask=input_mask,
                     )
+
+                    if target_mask is not None:
+                        target = target.masked_fill(target_mask == 0, 0.0)
 
                     loss_kwargs = (
                         {"return_model_outputs": True}
@@ -822,17 +831,17 @@ class Trainer:
                     )
 
                     # Apply mask
-                    if mask is not None:
+                    if target_mask is not None:
                         if isinstance(valid_loss, tuple):
-                            valid_loss = (valid_loss[0] * mask, valid_loss[1])
+                            valid_loss = (valid_loss[0] * target_mask, valid_loss[1])
                         else:
-                            valid_loss = valid_loss * mask
+                            valid_loss = valid_loss * target_mask
 
                     # Save first batch for plotting
                     if v_i == 0:
                         plot_state, plot_background = state, background
                         plot_outputs = self._get_plot_outputs(
-                            valid_loss, condition, state, lead_time_label, reg_out
+                            valid_loss, condition, state, lead_time_label, reg_out, target_mask,
                         )
                     elif self.loss_type == "regression":
                         valid_loss, _ = valid_loss
@@ -861,7 +870,7 @@ class Trainer:
 
         return val_loss, plot_outputs, plot_state, plot_background
 
-    def _get_plot_outputs(self, valid_loss, condition, state, lead_time_label, reg_out):
+    def _get_plot_outputs(self, valid_loss, condition, state, lead_time_label, reg_out, target_mask):
         r"""
         Get outputs for validation plotting.
 
@@ -877,6 +886,8 @@ class Trainer:
             Lead time embedding indices if using lead time conditioning.
         reg_out : torch.Tensor or None
             Regression network output for residual addition.
+        target_mask : torch.Tensor or None
+            Mask used to zero invalid cells in validation outputs.
 
         Returns
         -------
@@ -893,10 +904,19 @@ class Trainer:
             )
             if "regression" in self.condition_list:
                 outputs += reg_out
+
+            if target_mask is not None:
+                outputs = outputs.masked_fill(target_mask == 0, 0.0)
+
             return outputs
         else:
-            # Regression model - valid_loss is (loss_tensor, output_images)
-            valid_loss_tensor, output_images = valid_loss
+            _, output_images = valid_loss
+
+            if target_mask is not None:
+                output_images = output_images.masked_fill(
+                    target_mask == 0, 0.0,
+                )
+
             return output_images
 
     # =========================================================================

@@ -95,6 +95,7 @@ def build_network_condition_and_target(
     regression_net: Module | None = None,
     condition_list: Iterable[str] = ("state", "background"),
     regression_condition_list: Iterable[str] = ("state", "background"),
+    regression_mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
     """Build the condition and target tensors for the network.
 
@@ -107,6 +108,7 @@ def build_network_condition_and_target(
         condition_list: list of conditions to include, may include 'state', 'background', 'regression' and 'invariant'
         regression_condition_list: list of conditions for the regression network, may include 'state', 'background', and 'invariant'
             This is only used if regression_net is set.
+        regression_mask: Mask applied to the regression output before it is used for diffusion conditioning and residual construction.
     Returns:
         A tuple of tensors: (
             condition: model condition concatenated from conditions specified in condition_list,
@@ -135,7 +137,7 @@ def build_network_condition_and_target(
     with torch.no_grad():
         if "regression" in condition_list:
             # Inference regression model
-            condition_tensors["regression"] = regression_model_forward(
+            regression_output = regression_model_forward(
                 regression_net,
                 state_input,
                 background,
@@ -143,7 +145,15 @@ def build_network_condition_and_target(
                 lead_time_label=lead_time_label,
                 condition_list=regression_condition_list,
             )
-            target = target - condition_tensors["regression"]
+
+            if regression_mask is not None:
+                regression_output = regression_output.masked_fill(
+                    regression_mask == 0,
+                    0.0,
+                )
+
+            condition_tensors["regression"] = regression_output
+            target = target - regression_output
 
         condition = [
             y for c in condition_list if (y := condition_tensors[c]) is not None
@@ -154,8 +164,8 @@ def build_network_condition_and_target(
 
 
 def unpack_batch(batch, device, memory_format=torch.preserve_format):
-    """Unpack a data batch into background, state, mask and lead time label with the correct
-    device and data types.
+    """Unpack a batch into background, state, input mask, target mask,
+    and lead-time label.
 
     Args:
         batch: Dictionary containing batch data
@@ -163,8 +173,8 @@ def unpack_batch(batch, device, memory_format=torch.preserve_format):
         memory_format: Optional memory format (e.g., torch.channels_last)
 
     Returns:
-        Tuple of (background, state, mask, lead_time_label)
-        - mask is None if not present in batch, otherwise a list of mask tensors
+        Tuple of (background, state, input_mask, target_mask, lead_time_label)
+        - each mask is None if not present in batch
     """
     background = batch["background"].to(
         device=device,
@@ -184,11 +194,18 @@ def unpack_batch(batch, device, memory_format=torch.preserve_format):
         for s in batch["state"]
     ]
 
-    # Mask for weighting loss (e.g., ignore zero solar radiation pixels)
-    # Mask corresponds to the target state only
-    mask = batch.get("mask", None)
-    if mask is not None:
-        mask = mask.to(
+    input_mask = batch.get("input_mask")
+    if input_mask is not None:
+        input_mask = input_mask.to(
+            device=device,
+            dtype=torch.float32,
+            non_blocking=True,
+            memory_format=memory_format,
+        )
+
+    target_mask = batch.get("target_mask")
+    if target_mask is not None:
+        target_mask = target_mask.to(
             device=device,
             dtype=torch.float32,
             non_blocking=True,
@@ -198,7 +215,7 @@ def unpack_batch(batch, device, memory_format=torch.preserve_format):
     lead_time_label = batch.get("lead_time_label")
     if lead_time_label is not None:
         lead_time_label = lead_time_label.to(device=device, dtype=torch.int64)
-    return (background, state, mask, lead_time_label)
+    return (background, state, input_mask, target_mask, lead_time_label)
 
 
 def diffusion_model_forward(

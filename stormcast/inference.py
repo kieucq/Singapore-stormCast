@@ -52,7 +52,15 @@ def main(cfg: DictConfig):
     lead_time_steps = dataset.lead_time_steps
 
     invariant_array = dataset.get_invariants()
-    invariant_tensor = torch.from_numpy(invariant_array).to(device).repeat(1, 1, 1, 1)
+
+    if invariant_array is None:
+        invariant_tensor = None
+    else:
+        invariant_tensor = torch.as_tensor(
+            invariant_array,
+            dtype=torch.float32,
+            device=device,
+        ).unsqueeze(0)
 
     if len(cfg.inference.output_state_channels) == 0:
         output_state_channels = state_channels.copy()
@@ -95,20 +103,48 @@ def main(cfg: DictConfig):
         for i in range(n_steps):
             data = dataset[i + hours_since_jan_01]
 
-            background = data["background"].to(device=device, dtype=torch.float32)
-            background = background.unsqueeze(0)
+            background = torch.as_tensor(
+                data["background"],
+                dtype=torch.float32,
+                device=device,
+            ).unsqueeze(0)
+
+            input_state = torch.as_tensor(
+                data["state"][0],
+                dtype=torch.float32,
+                device=device,
+            ).unsqueeze(0)
+
+            target_state = torch.as_tensor(
+                data["state"][1],
+                dtype=torch.float32,
+                device=device,
+            ).unsqueeze(0)
+
+            input_mask = torch.as_tensor(
+                data["input_mask"],
+                dtype=torch.float32,
+                device=device,
+            ).unsqueeze(0)
+
+            target_mask = torch.as_tensor(
+                data["target_mask"],
+                dtype=torch.float32,
+                device=device,
+            ).unsqueeze(0)
 
             if i == 0:
-                state_pred = data["state"][0].to(device=device, dtype=torch.float32)
-                state_pred = state_pred.unsqueeze(0)
+                state_pred = input_state
                 state_pred_edm = state_pred.clone()
                 state_pred_noedm = state_pred.clone()
+
                 lead_time_label = data.get("lead_time_label")
                 if lead_time_label is not None:
-                    lead_time_label = lead_time_label.to(
-                        device=device, dtype=torch.int64
-                    )
-                    lead_time_label = lead_time_label.unsqueeze(0)
+                    lead_time_label = torch.as_tensor(
+                        lead_time_label,
+                        dtype=torch.int64,
+                        device=device,
+                    ).unsqueeze(0)
 
             assert (
                 state_pred_edm.shape == (1, len(state_channels)) + dataset.image_shape()
@@ -121,7 +157,7 @@ def main(cfg: DictConfig):
             write_inference_results_zarr(
                 dataset.denormalize_state(state_pred_edm.cpu().numpy())[0],
                 dataset.denormalize_state(state_pred_noedm.cpu().numpy())[0],
-                dataset.denormalize_state(data["state"][0].cpu().numpy()),
+                dataset.denormalize_state(data["state"][0].cpu().numpy())[0],
                 edm_prediction_group,
                 noedm_prediction_group,
                 target_group,
@@ -139,13 +175,20 @@ def main(cfg: DictConfig):
                 regression_net=regression_model,
                 condition_list=cfg.model.diffusion_conditions,
                 regression_condition_list=cfg.model.regression_conditions,
+                regression_mask=input_mask,
             )
 
             if state_pred is None:  # in case of no regression model
                 state_pred = torch.zeros_like(state_pred_edm)
 
+            if target_mask is not None:
+                state_pred = state_pred.masked_fill(
+                    target_mask == 0,
+                    0.0,
+                )
+
             state_pred_noedm = state_pred.clone()
-            # inference diffusion model
+
             edm_corrected_outputs = diffusion_model_forward(
                 diffusion_model,
                 condition,
@@ -154,14 +197,21 @@ def main(cfg: DictConfig):
                 lead_time_label=lead_time_label,
             )
 
-            state_pred[0, :] += edm_corrected_outputs[0].float()
+            state_pred = state_pred + edm_corrected_outputs.float()
+
+            if target_mask is not None:
+                state_pred = state_pred.masked_fill(
+                    target_mask == 0,
+                    0.0,
+                )
+
             state_pred_edm = state_pred.clone()
 
             varidx_state = vardict_state[cfg.inference.plot_var_state]
             varidx_background = vardict_background[cfg.inference.plot_var_background]
 
             background_arr = background.cpu().numpy()[0]
-            state_true_arr = data["state"][1].cpu().numpy()
+            state_true_arr = target_state.cpu().numpy()[0]
             state_pred_arr = state_pred.cpu().numpy()[0]
 
             background_arr = dataset.denormalize_background(background_arr)
