@@ -21,12 +21,19 @@ CONFIG_NAME="$1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STORMCAST_DIR="$HOME/scratch/physicsnemo-v2.0.0/examples/weather/stormcast"
 
-DATASET_CONFIG="$SCRIPT_DIR/config/dataset/singv_regression.yaml"
+DATASET_CONFIG_DIR="$SCRIPT_DIR/config/dataset"
+DATASET_ADAPTER="$SCRIPT_DIR/regression_dataset_adapter.py"
 TRAINING_CONFIG="$SCRIPT_DIR/config/${CONFIG_NAME}.yaml"
 
-if [[ ! -f "$DATASET_CONFIG" ]]; then
-    echo "Dataset configuration not found:" >&2
-    echo "  $DATASET_CONFIG" >&2
+if [[ ! -d "$DATASET_CONFIG_DIR" ]]; then
+    echo "Dataset configuration directory not found:" >&2
+    echo "  $DATASET_CONFIG_DIR" >&2
+    exit 1
+fi
+
+if [[ ! -f "$DATASET_ADAPTER" ]]; then
+    echo "Dataset adapter not found:" >&2
+    echo "  $DATASET_ADAPTER" >&2
     exit 1
 fi
 
@@ -41,12 +48,16 @@ mkdir -p \
     "$STORMCAST_DIR/config/dataset"
 
 ln -sfn \
-    "$SCRIPT_DIR/regression_dataset_adapter.py" \
+    "$DATASET_ADAPTER" \
     "$STORMCAST_DIR/datasets/regression_dataset_adapter.py"
 
-ln -sfn \
-    "$DATASET_CONFIG" \
-    "$STORMCAST_DIR/config/dataset/singv_regression.yaml"
+shopt -s nullglob
+
+for DATASET_CONFIG in "$DATASET_CONFIG_DIR"/*.yaml; do
+    ln -sfn \
+        "$DATASET_CONFIG" \
+        "$STORMCAST_DIR/config/dataset/$(basename "$DATASET_CONFIG")"
+done
 
 ln -sfn \
     "$TRAINING_CONFIG" \
