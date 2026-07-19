@@ -75,6 +75,20 @@ def main(cfg: DictConfig):
         for i, background_channel in enumerate(background_channels)
     }
 
+    latitude_getter = getattr(dataset, "latitude", None)
+    longitude_getter = getattr(dataset, "longitude", None)
+
+    latitude = (
+        np.asarray(latitude_getter(), dtype=np.float32)
+        if callable(latitude_getter)
+        else None
+    )
+    longitude = (
+        np.asarray(longitude_getter(), dtype=np.float32)
+        if callable(longitude_getter)
+        else None
+    )
+
     # Load pretrained models
     if "regression" in cfg.model.diffusion_conditions:
         regression_model = (
@@ -179,15 +193,18 @@ def main(cfg: DictConfig):
                 regression_mask=forecast_mask,
             )
 
-            if regression_output is None:  # in case of no regression model
+            if regression_output is None:
                 regression_output = torch.zeros_like(state_pred)
 
-            regression_output = regression_output.masked_fill(
+            # build_network_condition_and_target() has already applied forecast_mask
+            # to the regression output used for diffusion conditioning.
+
+            # The future validity mask is unavailable during a real forecast,
+            # so retain the initial input mask throughout the rollout.
+            state_pred_noedm = regression_output.masked_fill(
                 forecast_mask == 0,
                 0.0,
             )
-
-            state_pred_noedm = regression_output.clone()
 
             diffusion_correction = diffusion_model_forward(
                 diffusion_model,
@@ -198,7 +215,6 @@ def main(cfg: DictConfig):
             )
 
             state_pred = regression_output + diffusion_correction.float()
-
             state_pred = state_pred.masked_fill(
                 forecast_mask == 0,
                 0.0,
@@ -218,11 +234,11 @@ def main(cfg: DictConfig):
                 target_state.cpu().numpy()
             )[0]
 
-            forecast_valid = forecast_mask.cpu().numpy()[0].astype(bool)
+            prediction_valid = forecast_mask.cpu().numpy()[0].astype(bool)
             target_valid = target_mask.cpu().numpy()[0].astype(bool)
 
-            denorm_pred_edm[~forecast_valid] = np.nan
-            denorm_pred_noedm[~forecast_valid] = np.nan
+            denorm_pred_edm[~prediction_valid] = np.nan
+            denorm_pred_noedm[~prediction_valid] = np.nan
             denorm_target[~target_valid] = np.nan
 
             write_inference_results_zarr(
@@ -244,36 +260,101 @@ def main(cfg: DictConfig):
                 (valid_time - initial_time).total_seconds() / 3600
             )
 
-            varidx_state = vardict_state[cfg.inference.plot_var_state]
+            plot_var_state = cfg.inference.plot_var_state
+
+            if plot_var_state not in vardict_state:
+                raise ValueError(
+                    f"Unknown state plotting variable {plot_var_state!r}. "
+                    f"Available variables: {state_channels}"
+                )
+
+            varidx_state = vardict_state[plot_var_state]
 
             plot_var_background = cfg.inference.get(
                 "plot_var_background",
                 None,
             )
 
+            background_plot = None
+            background_mask_plot = None
+
             if background_channels and plot_var_background is not None:
-                background_arr = dataset.denormalize_background(
-                    background.cpu().numpy()[0]
+                if plot_var_background not in vardict_background:
+                    raise ValueError(
+                        f"Unknown background plotting variable "
+                        f"{plot_var_background!r}. Available variables: "
+                        f"{background_channels}"
+                    )
+
+                denormalize_background = getattr(
+                    dataset,
+                    "denormalize_background",
+                    None,
+                )
+
+                if not callable(denormalize_background):
+                    raise AttributeError(
+                        "The dataset provides background channels but does not "
+                        "implement denormalize_background()."
+                    )
+
+                background_arr = denormalize_background(
+                    background.detach().float().cpu().numpy()[0]
                 )
 
                 varidx_background = vardict_background[
                     plot_var_background
                 ]
                 background_plot = background_arr[varidx_background]
-            else:
-                background_plot = None
+
+                # Optional support for datasets that provide a background validity mask.
+                background_mask_data = data.get("background_mask")
+
+                if background_mask_data is not None:
+                    if torch.is_tensor(background_mask_data):
+                        background_mask_arr = (
+                            background_mask_data.detach()
+                            .float()
+                            .cpu()
+                            .numpy()
+                        )
+                    else:
+                        background_mask_arr = np.asarray(
+                            background_mask_data,
+                            dtype=np.float32,
+                        )
+
+                    if background_mask_arr.ndim == 3:
+                        background_mask_plot = background_mask_arr[
+                            varidx_background
+                        ]
+                    elif background_mask_arr.ndim == 2:
+                        background_mask_plot = background_mask_arr
+                    else:
+                        raise ValueError(
+                            "background_mask must have shape (C, H, W) "
+                            f"or (H, W), got {background_mask_arr.shape}."
+                        )
+
             fig = inference_plot(
                 background_plot,
                 denorm_pred_edm[varidx_state],
                 denorm_target[varidx_state],
                 plot_var_background,
-                cfg.inference.plot_var_state,
+                plot_var_state,
                 initial_time,
                 forecast_hour,
+                prediction_mask=prediction_valid[varidx_state],
+                truth_mask=target_valid[varidx_state],
+                background_mask=background_mask_plot,
+                latitude=latitude,
+                longitude=longitude,
             )
 
             fig.savefig(
-                f"{cfg.inference.rundir}/out_{forecast_hour}h.png"
+                f"{cfg.inference.rundir}/out_{forecast_hour}h.png",
+                dpi=150,
+                bbox_inches="tight",
             )
             plt.close(fig)
 
