@@ -40,6 +40,10 @@ def main(cfg: DictConfig):
     dist = DistributedManager()
     device = dist.device
 
+    seed = int(cfg.inference.get("seed", 0))
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
     initial_time = datetime.fromisoformat(cfg.inference.initial_time)
     n_steps = cfg.inference.n_steps
 
@@ -260,15 +264,37 @@ def main(cfg: DictConfig):
                 (valid_time - initial_time).total_seconds() / 3600
             )
 
-            plot_var_state = cfg.inference.plot_var_state
+            # Variables to plot from this forecast.
+            plot_state_variables = list(
+                cfg.inference.get("plot_state_variables", [])
+            )
 
-            if plot_var_state not in vardict_state:
-                raise ValueError(
-                    f"Unknown state plotting variable {plot_var_state!r}. "
-                    f"Available variables: {state_channels}"
+            # Keep compatibility with the original single-variable config.
+            if not plot_state_variables:
+                plot_var_state = cfg.inference.get(
+                    "plot_var_state",
+                    None,
                 )
 
-            varidx_state = vardict_state[plot_var_state]
+                if plot_var_state is None:
+                    raise ValueError(
+                        "Set either inference.plot_state_variables or "
+                        "inference.plot_var_state."
+                    )
+
+                plot_state_variables = [plot_var_state]
+
+            unknown_variables = [
+                variable
+                for variable in plot_state_variables
+                if variable not in vardict_state
+            ]
+
+            if unknown_variables:
+                raise ValueError(
+                    f"Unknown plotting variables: {unknown_variables}. "
+                    f"Available variables: {state_channels}"
+                )
 
             plot_var_background = cfg.inference.get(
                 "plot_var_background",
@@ -307,7 +333,6 @@ def main(cfg: DictConfig):
                 ]
                 background_plot = background_arr[varidx_background]
 
-                # Optional support for datasets that provide a background validity mask.
                 background_mask_data = data.get("background_mask")
 
                 if background_mask_data is not None:
@@ -336,27 +361,33 @@ def main(cfg: DictConfig):
                             f"or (H, W), got {background_mask_arr.shape}."
                         )
 
-            fig = inference_plot(
-                background_plot,
-                denorm_pred_edm[varidx_state],
-                denorm_target[varidx_state],
-                plot_var_background,
-                plot_var_state,
-                initial_time,
-                forecast_hour,
-                prediction_mask=prediction_valid[varidx_state],
-                truth_mask=target_valid[varidx_state],
-                background_mask=background_mask_plot,
-                latitude=latitude,
-                longitude=longitude,
-            )
+            # The forecast has already been generated for all variables.
+            # Only the plotting step is repeated here.
+            for plot_var_state in plot_state_variables:
+                varidx_state = vardict_state[plot_var_state]
 
-            fig.savefig(
-                f"{cfg.inference.rundir}/out_{forecast_hour}h.png",
-                dpi=150,
-                bbox_inches="tight",
-            )
-            plt.close(fig)
+                fig = inference_plot(
+                    background_plot,
+                    denorm_pred_edm[varidx_state],
+                    denorm_target[varidx_state],
+                    plot_var_background,
+                    plot_var_state,
+                    initial_time,
+                    forecast_hour,
+                    prediction_mask=prediction_valid[varidx_state],
+                    truth_mask=target_valid[varidx_state],
+                    background_mask=background_mask_plot,
+                    latitude=latitude,
+                    longitude=longitude,
+                )
+
+                fig.savefig(
+                    f"{cfg.inference.rundir}/"
+                    f"out_{forecast_hour}h_{plot_var_state}.png",
+                    dpi=150,
+                    bbox_inches="tight",
+                )
+                plt.close(fig)
 
     save_inference_results_netcdf(
         ds_out_path=cfg.inference.rundir,
