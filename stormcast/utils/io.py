@@ -22,38 +22,75 @@ import zarr
 
 
 def init_inference_results_zarr(
-    dataset,  # dataset object
-    rundir,  # directory to save results
-    output_state_channels,  # list of channel names
-    n_steps,  # number of time steps
+    dataset,
+    rundir,
+    output_state_channels,
+    n_steps,
 ):
-    # initialize zarr
+    """Create the Zarr output used by inference."""
+
     zarr_output_path = os.path.join(rundir, "data.zarr")
-    group = zarr.open_group(zarr_output_path, mode="w")
-    group.array("latitude", data=dataset.latitude())
-    group.array("longitude", data=dataset.longitude())
+
+    # Retain the Zarr v2 file format used by the original StormCast code,
+    # while using the current Zarr Python API.
+    group = zarr.open_group(
+        zarr_output_path,
+        mode="w",
+        zarr_format=2,
+    )
+
+    latitude = np.asarray(dataset.latitude(), dtype=np.float32)
+    longitude = np.asarray(dataset.longitude(), dtype=np.float32)
+
+    group.create_array(
+        "latitude",
+        data=latitude,
+    )
+    group.create_array(
+        "longitude",
+        data=longitude,
+    )
 
     edm_prediction_group = group.create_group("edm_prediction")
     noedm_prediction_group = group.create_group("noedm_prediction")
     target_group = group.create_group("target")
-    state, _ = dataset[0]["state"]
-    assert state.ndim == 3
 
-    grid_size = state.shape[1:]
+    input_state, _ = dataset[0]["state"]
+    assert input_state.ndim == 3
+
+    grid_size = input_state.shape[1:]
+    output_shape = (n_steps, *grid_size)
+    output_chunks = (1, *grid_size)
 
     for name in output_state_channels:
-        target_group.empty(
-            name, shape=(n_steps,) + grid_size, chunks=[1, *grid_size], compressor=None
+        target_group.create_array(
+            name,
+            shape=output_shape,
+            chunks=output_chunks,
+            dtype=np.float32,
+            fill_value=np.nan,
         )
-        edm_prediction_group.empty(
-            name, shape=(n_steps,) + grid_size, chunks=[1, *grid_size], compressor=None
+        edm_prediction_group.create_array(
+            name,
+            shape=output_shape,
+            chunks=output_chunks,
+            dtype=np.float32,
+            fill_value=np.nan,
         )
-        noedm_prediction_group.empty(
-            name, shape=(n_steps,) + grid_size, chunks=[1, *grid_size], compressor=None
+        noedm_prediction_group.create_array(
+            name,
+            shape=output_shape,
+            chunks=output_chunks,
+            dtype=np.float32,
+            fill_value=np.nan,
         )
 
-    return (group, target_group, edm_prediction_group, noedm_prediction_group)
-
+    return (
+        group,
+        target_group,
+        edm_prediction_group,
+        noedm_prediction_group,
+    )
 
 def write_inference_results_zarr(
     denorm_state_pred_edm,  # predictions with diffusion
