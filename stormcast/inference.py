@@ -362,10 +362,11 @@ def main(cfg: DictConfig):
                         )
 
             # The forecast has already been generated for all variables.
-            # Only the plotting step is repeated here.
+            # Create separate regression-only and regression+diffusion plots.
             for plot_var_state in plot_state_variables:
                 varidx_state = vardict_state[plot_var_state]
 
+                # Regression + diffusion
                 fig = inference_plot(
                     background_plot,
                     denorm_pred_edm[varidx_state],
@@ -383,7 +384,33 @@ def main(cfg: DictConfig):
 
                 fig.savefig(
                     f"{cfg.inference.rundir}/"
-                    f"out_{forecast_hour}h_{plot_var_state}.png",
+                    f"out_{forecast_hour}h_{plot_var_state}"
+                    f"_regression_diffusion.png",
+                    dpi=150,
+                    bbox_inches="tight",
+                )
+                plt.close(fig)
+
+                # Regression only
+                fig = inference_plot(
+                    background_plot,
+                    denorm_pred_noedm[varidx_state],
+                    denorm_target[varidx_state],
+                    plot_var_background,
+                    plot_var_state,
+                    initial_time,
+                    forecast_hour,
+                    prediction_mask=prediction_valid[varidx_state],
+                    truth_mask=target_valid[varidx_state],
+                    background_mask=background_mask_plot,
+                    latitude=latitude,
+                    longitude=longitude,
+                )
+
+                fig.savefig(
+                    f"{cfg.inference.rundir}/"
+                    f"out_{forecast_hour}h_{plot_var_state}"
+                    f"_regression_only.png",
                     dpi=150,
                     bbox_inches="tight",
                 )
