@@ -1,0 +1,37 @@
+#!/bin/bash
+#PBS -N sc_diff_stable
+#PBS -q normal
+#PBS -P 17001770
+#PBS -l select=1:ncpus=16:mem=110G:ngpus=1
+#PBS -l walltime=72:00:00
+#PBS -j oe
+#PBS -o /scratch/users/nus/e1155933/retraining/logs/diffusion-stable-pilot.log
+
+set -euo pipefail
+
+export PYTHONNOUSERSITE=1
+export PYTHONUNBUFFERED=1
+export MPLBACKEND=Agg
+export MPLCONFIGDIR=/scratch/users/nus/e1155933/matplotlib-cache
+export OMP_NUM_THREADS=4
+
+mkdir -p "$MPLCONFIGDIR"
+
+PROJECT=/data/projects/17001770/weather_department/cmd/aditya/Singapore-stormCast/stormcast
+TORCHRUN=/scratch/users/nus/e1155933/conda/envs/sc/bin/torchrun
+
+cd "$PROJECT"
+
+echo "Host: $(hostname)"
+echo "Started: $(date)"
+echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-not-set}"
+echo "Config: singv_diffusion_10years_stable_pilot"
+
+"$TORCHRUN" \
+    --standalone \
+    --nnodes=1 \
+    --nproc_per_node=1 \
+    train.py \
+    --config-name singv_diffusion_10years_stable_pilot
+
+echo "Finished: $(date)"

@@ -1,0 +1,114 @@
+# Stable-optimisation pilot for StormCast diffusion training using
+# ten years of SINGV training data.
+#
+# Training:
+#   1995-01-01 through 2004-12-31
+#
+# Validation:
+#   2005-01-01 through 2005-12-31
+#
+# This experiment keeps the existing model architecture, residual target,
+# conditioning, masking, EDM loss and sigma_data unchanged.
+#
+# It tests whether the noisy diffusion forecasts were caused primarily by
+# unstable optimisation:
+#   - effective batch size increased from 1 to 8;
+#   - physical GPU batch remains 1 using gradient accumulation;
+#   - learning rate reduced from 4e-4 to 1e-4;
+#   - 1,000-step linear learning-rate warm-up added.
+
+defaults:
+  - dataset/singv_10years
+  - model/stormcast
+  - training/default
+  - sampler/edm_deterministic
+  - hydra/default
+  - _self_
+
+model:
+  model_name: diffusion
+
+  # Conditions used by the frozen regression model.
+  regression_conditions:
+    - state
+
+  # Conditions supplied to the diffusion model.
+  diffusion_conditions:
+    - state
+    - regression
+
+  regression_weights: /scratch/users/nus/e1155933/retraining/runs/singv-regression-10years/training-100000steps/checkpoints_regression/StormCastUNet.0.100000.mdlus
+
+  spatial_pos_embed: false
+
+  # Keep the architecture identical to the previous 100,000-step run.
+  hyperparameters:
+    model_channels: 32
+    channel_mult: [1, 2, 2, 2]
+    num_blocks: 1
+    attn_resolutions: []
+    bottleneck_attention: false
+    checkpoint_level: 0
+
+training:
+  outdir: /scratch/users/nus/e1155933/retraining/runs
+  experiment_name: singv-diffusion-10years
+  run_id: stable-pilot-batch8-lr1e4-20k
+  rundir: ${training.outdir}/${training.experiment_name}/${training.run_id}
+
+  num_data_workers: 4
+
+  # Effective batch size is 8. Only one sample is held on the GPU at a
+  # time, with eight forward/backward passes accumulated before each
+  # optimiser update.
+  batch_size: 8
+  batch_size_per_gpu: 1
+
+  # 20,000 optimiser steps × 8 samples per step
+  # = 160,000 total sample presentations.
+  total_train_steps: 20000
+
+  # Safer optimisation settings.
+  lr: 0.0001
+  lr_rampup_steps: 1000
+
+  # Keep clipping unchanged so this experiment isolates the effects of
+  # effective batch size, learning rate and warm-up.
+  clip_grad_norm: 1.0
+
+  seed: 42
+
+  print_progress_freq: 20
+
+  # Frequent checkpoints permit resumption and detailed comparison.
+  checkpoint_freq: 1000
+  validation_freq: 1000
+  validation_steps: 1
+
+  perf:
+    fp_optimizations: amp-bf16
+    torch_compile: true
+    use_apex_gn: false
+    allow_tf32: true
+    allow_fp16_reduced_precision: false
+
+  validation_plot_variables:
+    - tas
+    - pr
+    - ta_1000
+    - ua_1000
+    - ta_850
+    - zg_500
+
+  validation_plot_background_variables: []
+
+  log_to_wandb: false
+
+  loss:
+    type: edm
+    sigma_data: 0.5
+
+# Keep validation sampling identical to the previous training run.
+sampler:
+  args:
+    num_steps: 18
