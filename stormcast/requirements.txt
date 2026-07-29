@@ -1,2 +1,23 @@
-pyproj
-torch-optimi
+# Core scientific/data stack
+numpy==2.5.1
+pandas==3.0.5
+xarray==2026.7.0
+netCDF4==1.7.4
+dask[array]==2026.7.1
+pyproj==3.7.2
+zarr==3.2.1
+
+# Configuration
+hydra-core==1.3.4
+omegaconf==2.3.1
+
+# Training and model dependencies
+nvidia-physicsnemo==2.0.0
+torch-optimi==0.3.3
+warp-lang==1.12.1
+
+# Plotting and diagnostics
+matplotlib==3.11.1
+wandb==0.28.1
+psutil==7.2.2
+tensorboard==2.21.0
