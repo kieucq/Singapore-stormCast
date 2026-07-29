@@ -1,0 +1,61 @@
+# StormCast regression training using one month of SINGV data.
+
+defaults:
+  - dataset/singv_regression
+  - model/stormcast
+  - training/default
+  - sampler/edm_deterministic
+  - hydra/default
+  - _self_
+
+dataset:
+  train_manifest: manifests/training_19950101_19950131.csv
+  validation_manifest: manifests/validation_19950201_19950207.csv
+  normalisation_path: normalisation_stats/training_19950101_19950131_normalisation_stats.npz
+
+
+model:
+  regression_conditions: ["state"]
+
+  hyperparameters:
+    model_channels: 32
+    channel_mult: [1, 2, 2, 2]
+    num_blocks: 1
+    attn_resolutions: []
+    bottleneck_attention: false
+    checkpoint_level: 0
+
+training:
+  outdir: /scratch/users/nus/e1155933/retraining/runs
+  experiment_name: singv-regression-1month
+  run_id: training-1000steps
+  rundir: ${training.outdir}/${training.experiment_name}/${training.run_id}
+
+  num_data_workers: 0
+
+  batch_size: 1
+  batch_size_per_gpu: 1
+
+  # January 1995 contains 123 contiguous six-hour pairs.
+  # 1000 steps is approximately 8.1 epochs.
+  total_train_steps: 1000
+
+  lr_rampup_steps: 0
+  clip_grad_norm: 1.0
+
+  print_progress_freq: 20
+
+  # Validate and checkpoint about once every two epochs.
+  validation_freq: 250
+  checkpoint_freq: 250
+  validation_steps: 16
+
+  validation_plot_variables:
+    - tas
+    - pr
+    - ta_1000
+    - ua_1000
+    - ta_850
+    - zg_500
+
+  log_to_wandb: false

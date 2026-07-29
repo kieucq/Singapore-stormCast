@@ -1,0 +1,74 @@
+# Run inference using the one-month SINGV regression and diffusion models.
+#
+# Training:
+#   1995-01-01 through 1995-01-31
+#
+# Inference data:
+#   1995-02-01 through 1995-02-07
+
+defaults:
+  - dataset/singv_regression
+  - model/stormcast
+  - sampler/edm_deterministic
+  - inference/stormcast
+  - _self_
+
+dataset:
+  train_manifest: manifests/training_19950101_19950131.csv
+  validation_manifest: manifests/validation_19950201_19950207.csv
+  normalisation_path: normalisation_stats/training_19950101_19950131_normalisation_stats.npz
+
+model:
+  regression_conditions:
+    - state
+
+  diffusion_conditions:
+    - state
+    - regression
+
+inference:
+  outdir: /scratch/users/nus/e1155933/retraining/inference
+  experiment_name: singv-inference-1month
+  run_id: regression-diffusion-comparison
+  rundir: ${inference.outdir}/${inference.experiment_name}/${inference.run_id}
+
+  regression_checkpoint: /scratch/users/nus/e1155933/retraining/runs/singv-regression-1month/training-1000steps/checkpoints_regression/StormCastUNet.0.1000.mdlus
+
+  diffusion_checkpoint: /scratch/users/nus/e1155933/retraining/runs/singv-diffusion-1month/training-1000steps/checkpoints_diffusion/EDMPrecond.0.1000.mdlus
+
+  # First input time in the February 1995 validation period.
+  initial_time: "1995-02-01T01:00:00"
+
+  n_steps: 1
+
+  plot_state_variables:
+    - pr
+    - tas
+    - ta_1000
+    - ta_850
+    - hus_850
+    - zg_500
+
+  plot_var_background: null
+
+  output_state_channels:
+    - pr
+    - tas
+    - ta_1000
+    - ta_850
+    - hus_850
+    - zg_500
+
+  save_vertical_vars: []
+  save_vertical_levels: []
+
+  save_horizontal_vars:
+    - pr
+
+sampler:
+  args:
+    num_steps: 18
+
+hydra:
+  run:
+    dir: ${inference.rundir}
