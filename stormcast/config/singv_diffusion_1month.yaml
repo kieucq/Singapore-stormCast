@@ -13,17 +13,12 @@
 # not as a scientifically meaningful diffusion training run.
 
 defaults:
-  - dataset/singv_regression
+  - dataset/singv_1month
   - model/stormcast
   - training/default
   - sampler/edm_deterministic
   - hydra/default
   - _self_
-
-dataset:
-  train_manifest: manifests/training_19950101_19950131.csv
-  validation_manifest: manifests/validation_19950201_19950207.csv
-  normalisation_path: normalisation_stats/training_19950101_19950131_normalisation_stats.npz
 
 model:
   model_name: diffusion
