@@ -91,7 +91,7 @@ import json
 import os
 import zipfile
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -602,6 +602,64 @@ def download_one(
     size_mb = destination.stat().st_size / (1024**2)
     print(f"Downloaded: {destination} ({size_mb:.1f} MiB)")
     return "downloaded"
+
+
+def ensure_era5_month(
+    valid_time: datetime,
+    *,
+    output_root: Path = DEFAULT_OUTPUT_DIR,
+    area: Sequence[float] = DEFAULT_AREA,
+) -> tuple[Path, Path]:
+    """
+    Ensure that both raw ERA5 files exist for the month containing valid_time.
+
+    Existing files are reused. Missing files are downloaded from CDS.
+    The returned paths are ordered as pressure-level, single-level.
+    """
+    month = YearMonth(valid_time.year, valid_time.month)
+    output_root = output_root.expanduser()
+    area = validate_area(area)
+
+    pressure_product = PRODUCT_SPECS["pressure"]
+    single_product = PRODUCT_SPECS["single"]
+
+    pressure_path = output_path(
+        output_root,
+        month,
+        pressure_product,
+    )
+    single_path = output_path(
+        output_root,
+        month,
+        single_product,
+    )
+
+    if pressure_path.is_file() and single_path.is_file():
+        print(f"Reusing raw ERA5 month: {month.label}")
+        return pressure_path, single_path
+
+    client = create_cds_client()
+
+    download_one(
+        client,
+        month,
+        pressure_product,
+        pressure_path,
+        area,
+        overwrite=False,
+        validate=True,
+    )
+    download_one(
+        client,
+        month,
+        single_product,
+        single_path,
+        area,
+        overwrite=False,
+        validate=True,
+    )
+
+    return pressure_path, single_path
 
 
 def print_dry_run(

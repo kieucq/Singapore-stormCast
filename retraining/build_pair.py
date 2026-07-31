@@ -4,11 +4,11 @@ Build one six-hour SINGV training pair.
 
 For a requested input time t, this script:
 
-1. assembles the native-grid SINGV states at t and t + 6 hours;
-2. prepares both states as 75-channel 624 x 624 NetCDF files;
-3. reuses existing assembled and prepared files unless overwriting is requested;
-4. verifies that the prepared files form a valid six-hour pair;
-5. optionally records the pair in a CSV manifest. (correction for later: hold on, this isn't actually optional now is it)
+1. assemble the native-grid SINGV states at t and t + 6 hours;
+2. ensure that the raw monthly ERA5 files containing t exist;
+3. prepare SINGV_t, ERA5_t, and SINGV_t+6h;
+4. validate the complete training sample;
+5. optionally record it in a six-column manifest.
 
 Example
 -------
@@ -24,7 +24,6 @@ Default outputs
 ---------------
 ~/scratch/retraining/assembled/assembled_YYYYMMDD_HHMM.nc
 ~/scratch/retraining/prepared/prepared_YYYYMMDD_HHMM.nc
-~/scratch/retraining/manifests/pairs.csv
 """
 
 from __future__ import annotations
@@ -42,18 +41,22 @@ import xarray as xr
 import assemble_state as assembler
 import prepare_state as preparer
 
+from background import download_era5 as era5_downloader
+from background import prepare_era5 as era5_preparer
+
 
 RETRAINING_DIR = Path("~/scratch/retraining").expanduser()
-DEFAULT_MANIFEST_PATH = RETRAINING_DIR / "manifests" / "pairs.csv"
 PAIR_INTERVAL = timedelta(hours=6)
 
 
 @dataclass(frozen=True)
 class TrainingPair:
-    """Paths and valid times for one six-hour training pair."""
+    """Paths and valid times for one complete six-hour training sample."""
 
     input_time: datetime
     input_file: Path
+    background_time: datetime
+    background_file: Path
     target_time: datetime
     target_file: Path
 
@@ -127,6 +130,32 @@ def ensure_prepared(
     )
 
 
+def ensure_background(
+    input_time: datetime,
+    *,
+    overwrite: bool,
+    quiet: bool,
+) -> Path:
+    """Create or reuse the prepared ERA5 background at the input time."""
+    output_path = era5_preparer.make_output_path(
+        input_time,
+        era5_preparer.DEFAULT_OUTPUT_DIR,
+    )
+
+    if output_path.exists() and not overwrite:
+        print(f"Reusing ERA5 background: {output_path}")
+        return output_path
+
+    print(f"Preparing ERA5 background: {input_time.isoformat()}")
+
+    return era5_preparer.prepare_era5(
+        input_time,
+        output_path=output_path,
+        overwrite=overwrite,
+        verbose=not quiet,
+    )
+
+
 def _read_scalar_time(dataset: xr.Dataset, path: Path) -> np.datetime64:
     """Read one scalar datetime64[ns] time coordinate."""
     if "time" not in dataset:
@@ -142,22 +171,37 @@ def _read_scalar_time(dataset: xr.Dataset, path: Path) -> np.datetime64:
     return np.datetime64(values.reshape(-1)[0], "ns")
 
 
-def validate_pair(pair: TrainingPair) -> None:
-    """Verify temporal and structural compatibility of two prepared states."""
+def validate_training_sample(pair: TrainingPair) -> None:
+    """Validate the SINGV input, ERA5 background, and SINGV target."""
     with (
         xr.open_dataset(pair.input_file, decode_times=True) as input_ds,
+        xr.open_dataset(pair.background_file, decode_times=True) as background_ds,
         xr.open_dataset(pair.target_file, decode_times=True) as target_ds,
     ):
         input_time = _read_scalar_time(input_ds, pair.input_file)
+        background_time = _read_scalar_time(background_ds, pair.background_file)
         target_time = _read_scalar_time(target_ds, pair.target_file)
 
         expected_input_time = np.datetime64(pair.input_time, "ns")
+        expected_background_time = np.datetime64(pair.background_time, "ns")
         expected_target_time = np.datetime64(pair.target_time, "ns")
 
         if input_time != expected_input_time:
             raise ValueError(
                 f"Input file time is {input_time}, expected "
                 f"{expected_input_time}: {pair.input_file}"
+            )
+
+        if background_time != expected_background_time:
+            raise ValueError(
+                f"Background file time is {background_time}, expected "
+                f"{expected_background_time}: {pair.background_file}"
+            )
+
+        if background_time != input_time:
+            raise ValueError(
+                "ERA5 background time does not match the SINGV input time: "
+                f"{background_time} vs {input_time}"
             )
 
         if target_time != expected_target_time:
@@ -184,11 +228,89 @@ def validate_pair(pair: TrainingPair) -> None:
                 f"{input_ds['state'].shape} vs {target_ds['state'].shape}"
             )
 
-        for coordinate in ("channel", "plev", "latitude", "longitude"):
+        for coordinate in ("channel", "plev", "y", "x", "latitude", "longitude", "latitude_bounds", "longitude_bounds"):
             if coordinate not in input_ds or coordinate not in target_ds:
                 raise ValueError(
                     f"Coordinate {coordinate!r} is missing from one of the "
                     "prepared files."
+                )
+
+        if "background" not in background_ds:
+            raise ValueError(
+                f"ERA5 file has no background variable: "
+                f"{pair.background_file}"
+            )
+
+        background = background_ds["background"]
+
+        expected_background_dims = (
+            "time",
+            "channel",
+            "y",
+            "x",
+        )
+        if background.dims != expected_background_dims:
+            raise ValueError(
+                f"ERA5 background dimensions are {background.dims}; "
+                f"expected {expected_background_dims}."
+            )
+
+        expected_background_shape = (1, 26, 624, 624)
+        if background.shape != expected_background_shape:
+            raise ValueError(
+                f"ERA5 background shape is {background.shape}; "
+                f"expected {expected_background_shape}."
+            )
+
+        expected_channels = np.asarray(
+            era5_preparer.CHANNEL_NAMES,
+            dtype=str,
+        )
+        actual_channels = np.asarray(
+            background_ds["channel"].values,
+            dtype=str,
+        )
+
+        if not np.array_equal(actual_channels, expected_channels):
+            raise ValueError(
+                "ERA5 background channel order is incorrect.\n"
+                f"Expected: {expected_channels.tolist()}\n"
+                f"Found:    {actual_channels.tolist()}"
+            )
+
+        if not np.all(np.isfinite(background.values)):
+            raise ValueError(
+                f"ERA5 background contains NaN or infinite values: "
+                f"{pair.background_file}"
+            )
+
+        if background_ds.attrs.get("normalization") != "none":
+            raise ValueError(
+                "ERA5 background must be unnormalized; found "
+                f"normalization={background_ds.attrs.get('normalization')!r}."
+            )
+
+        for coordinate in (
+            "y",
+            "x",
+            "latitude",
+            "longitude",
+            "latitude_bounds",
+            "longitude_bounds",
+        ):
+            if coordinate not in input_ds or coordinate not in background_ds:
+                raise ValueError(
+                    f"Coordinate {coordinate!r} is missing from the "
+                    "SINGV input or ERA5 background."
+                )
+
+            if not np.array_equal(
+                input_ds[coordinate].values,
+                background_ds[coordinate].values,
+            ):
+                raise ValueError(
+                    f"SINGV input and ERA5 background {coordinate} "
+                    "coordinates differ."
                 )
 
             if not np.array_equal(
@@ -199,9 +321,19 @@ def validate_pair(pair: TrainingPair) -> None:
                     f"Input and target {coordinate} coordinates differ."
                 )
 
-    print("Validated six-hour pair:")
-    print(f"  input:  {pair.input_time.isoformat()}  {pair.input_file}")
-    print(f"  target: {pair.target_time.isoformat()}  {pair.target_file}")
+    print("Validated training sample:")
+    print(
+        f"  input:      {pair.input_time.isoformat()}  "
+        f"{pair.input_file}"
+    )
+    print(
+        f"  background: {pair.background_time.isoformat()}  "
+        f"{pair.background_file}"
+    )
+    print(
+        f"  target:     {pair.target_time.isoformat()}  "
+        f"{pair.target_file}"
+    )
 
 
 def _manifest_path_value(path: Path) -> str:
@@ -226,6 +358,8 @@ def record_pair(
     fieldnames = [
         "input_time",
         "input_file",
+        "background_time",
+        "background_file",
         "target_time",
         "target_file",
     ]
@@ -233,13 +367,26 @@ def record_pair(
     row = {
         "input_time": pair.input_time.isoformat(),
         "input_file": _manifest_path_value(pair.input_file),
+        "background_time": pair.background_time.isoformat(),
+        "background_file": _manifest_path_value(pair.background_file),
         "target_time": pair.target_time.isoformat(),
         "target_file": _manifest_path_value(pair.target_file),
     }
 
-    if manifest_path.exists():
-        with manifest_path.open("r", newline="", encoding="utf-8") as file:
+    if manifest_path.exists() and manifest_path.stat().st_size > 0:
+        with manifest_path.open(
+            "r",
+            newline="",
+            encoding="utf-8",
+        ) as file:
             reader = csv.DictReader(file)
+
+            if reader.fieldnames != fieldnames:
+                raise ValueError(
+                    f"Manifest has columns {reader.fieldnames}; "
+                    f"expected {fieldnames}: {manifest_path}"
+                )
+
             for existing_row in reader:
                 if all(
                     existing_row.get(key) == value
@@ -269,10 +416,10 @@ def build_pair(
     *,
     overwrite_assembled: bool = False,
     overwrite_prepared: bool = False,
-    manifest_path: Path | None = DEFAULT_MANIFEST_PATH,
+    manifest_path: Path | None = None,
     quiet: bool = False,
 ) -> TrainingPair:
-    """Assemble, prepare, validate, and record one t -> t+6h pair."""
+    """Build and validate one complete t -> t+6h training sample."""
     target_time = input_time + PAIR_INTERVAL
 
     print("SINGV SIX-HOUR PAIR BUILD")
@@ -284,6 +431,7 @@ def build_pair(
         input_time,
         overwrite=overwrite_assembled,
     )
+    era5_downloader.ensure_era5_month(input_time)
     assembled_target = ensure_assembled(
         target_time,
         overwrite=overwrite_assembled,
@@ -300,6 +448,11 @@ def build_pair(
         overwrite=effective_overwrite_prepared,
         quiet=quiet,
     )
+    prepared_background = ensure_background(
+        input_time,
+        overwrite=effective_overwrite_prepared,
+        quiet=quiet,
+    )
     prepared_target = ensure_prepared(
         assembled_target,
         overwrite=effective_overwrite_prepared,
@@ -309,11 +462,13 @@ def build_pair(
     pair = TrainingPair(
         input_time=input_time,
         input_file=prepared_input,
+        background_time=input_time,
+        background_file=prepared_background,
         target_time=target_time,
         target_file=prepared_target,
     )
 
-    validate_pair(pair)
+    validate_training_sample(pair)
 
     if manifest_path is not None:
         record_pair(pair, manifest_path)
@@ -348,13 +503,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--overwrite-prepared",
         action="store_true",
-        help="Regenerate both prepared files but reuse assembled files.",
+        help=(
+            "Regenerate the prepared SINGV input, ERA5 background, "
+            "and SINGV target while reusing upstream data."
+        ),
     )
     parser.add_argument(
         "--manifest",
         type=Path,
-        default=DEFAULT_MANIFEST_PATH,
-        help=f"Pair manifest path (default: {DEFAULT_MANIFEST_PATH}).",
+        default=None,
+        help="Optional path at which to record the completed six-column training sample.",
     )
     parser.add_argument(
         "--quiet",
