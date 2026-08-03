@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Build SINGV six-hour input-target pairs over an explicit date range.
+Build StormCast six-hour training samples over an explicit date range.
 
 The user supplies:
 
@@ -14,10 +14,11 @@ The script automatically names the dataset:
 
 For each candidate time ``t``, it:
 
-1. considers the pair t -> t + 6 hours;
-2. skips pairs whose input or target falls on a known missing-data date;
-3. calls build_pair.build_pair() for each remaining pair;
-4. records successful pairs in a CSV manifest;
+1. considers the forecast pair t -> t + 6 hours;
+2. skips samples whose SINGV input or target falls on a known missing-data date;
+3. calls build_pair.build_pair() to ensure and validate SINGV_t, ERA5_t,
+   and SINGV_t+6h;
+4. records successful samples in a six-column CSV manifest;
 5. reuses completed work when the same command is run again.
 
 Example
@@ -82,6 +83,8 @@ KNOWN_MISSING_DAILY_FILES: dict[date, tuple[str, ...]] = {
 PAIR_COLUMNS = [
     "input_time",
     "input_file",
+    "background_time",
+    "background_file",
     "target_time",
     "target_file",
 ]
@@ -258,10 +261,12 @@ def append_csv_row(
 def pair_row(
     pair: pair_builder.TrainingPair,
 ) -> dict[str, str]:
-    """Convert a successfully built pair to one manifest row."""
+    """Convert a successfully built training sample to one manifest row."""
     return {
         "input_time": pair.input_time.isoformat(),
         "input_file": manifest_path_value(pair.input_file),
+        "background_time": pair.background_time.isoformat(),
+        "background_file": manifest_path_value(pair.background_file),
         "target_time": pair.target_time.isoformat(),
         "target_file": manifest_path_value(pair.target_file),
     }
@@ -272,15 +277,22 @@ def manifest_row_is_complete(
     expected_input_time: datetime,
 ) -> bool:
     """
-    Check that an existing row describes this pair and both files still exist.
+    Check that an existing row describes this sample and all three files exist.
 
     The prepared files themselves were validated when the row was created.
     Use --revalidate-existing to run build_pair again for completed rows.
     """
     expected_target_time = expected_input_time + PAIR_INTERVAL
+    expected_background_time = expected_input_time
 
     if row["input_time"] != expected_input_time.isoformat():
         return False
+
+    if row["background_time"] != expected_background_time.isoformat():
+        raise ValueError(
+            "Existing manifest background time does not match the "
+            f"input time for {expected_input_time.isoformat()}."
+        )
 
     if row["target_time"] != expected_target_time.isoformat():
         raise ValueError(
@@ -289,9 +301,10 @@ def manifest_row_is_complete(
         )
 
     input_file = resolve_manifest_file(row["input_file"])
+    background_file = resolve_manifest_file(row["background_file"])
     target_file = resolve_manifest_file(row["target_file"])
 
-    return input_file.is_file() and target_file.is_file()
+    return input_file.is_file() and background_file.is_file() and target_file.is_file()
 
 
 def build_dataset(
@@ -305,7 +318,7 @@ def build_dataset(
     dry_run: bool,
     progress_every: int,
 ) -> BuildCounts:
-    """Build every usable pair for one resolved range."""
+    """Build every usable training sample for one resolved range."""
     manifest_dir = manifest_dir.expanduser()
 
     if not dry_run:
@@ -324,8 +337,8 @@ def build_dataset(
 
     counts = BuildCounts(candidates=len(candidate_times))
 
-    print("SINGV DATASET BUILD")
-    print("===================")
+    print("STORMCAST DATASET BUILD")
+    print("=======================")
     print(f"Name:              {dataset_range.name}")
     print(
         f"Date range:        {dataset_range.start_date} "
@@ -475,21 +488,25 @@ def parse_args() -> argparse.Namespace:
         "--overwrite-assembled",
         action="store_true",
         help=(
-            "Regenerate assembled states. Their prepared states are also "
-            "regenerated."
+            "Regenerate the assembled SINGV input and target. "
+            "The prepared SINGV input, ERA5 background, and "
+            "SINGV target are also regenerated."
         ),
     )
     parser.add_argument(
         "--overwrite-prepared",
         action="store_true",
-        help="Regenerate prepared states while reusing assembled states.",
+        help=(
+            "Regenerate the prepared SINGV input, ERA5 background, "
+            "and SINGV target while reusing upstream data."
+        ),
     )
     parser.add_argument(
         "--revalidate-existing",
         action="store_true",
         help=(
-            "Call build_pair again for rows already present in the pair "
-            "manifest."
+            "Call build_pair again for training samples already "
+            "present in the manifest."
         ),
     )
     parser.add_argument(
