@@ -1,8 +1,12 @@
-"""SINGV dataset adapter for state-only StormCast regression.
+"""
+SINGV and ERA5 dataset adapter for StormCast training.
 
-The adapter reads input-target pairs from a CSV manifest, loads prepared SINGV
-states, applies training-set normalization, fills masked cells with zero, and
-returns samples in the format expected by the StormCast trainer.
+The adapter reads SINGV input-target pairs and corresponding ERA5
+backgrounds from a CSV manifest. It applies separate training-set
+normalization statistics to SINGV and ERA5, fills masked SINGV cells
+with zero, and returns samples in the format expected by the
+StormCast trainer.
+
 
 Dataset parameters
 ------------------
@@ -18,6 +22,9 @@ validation_manifest
 
 normalisation_path
     NPZ file produced by ``compute_normalisation_stats.py``.
+
+background_normalisation_path
+    NPZ file containing training-set ERA5 background statistics.
 """
 
 from __future__ import annotations
@@ -31,11 +38,12 @@ from typing import Any
 import numpy as np
 import xarray as xr
 
-from datasets.dataset import StormCastDataset
+from .dataset import StormCastDataset
 
 
-EXPECTED_COLUMNS = ("input_time", "input_file", "target_time", "target_file")
+EXPECTED_COLUMNS = ("input_time", "input_file", "background_time", "background_file", "target_time", "target_file")
 EXPECTED_STATE_DIMS = ("time", "channel", "y", "x")
+EXPECTED_BACKGROUND_DIMS = ("time", "channel", "y", "x")
 DEFAULT_DATA_ROOT = "~/scratch/retraining"
 
 
@@ -44,8 +52,11 @@ class PairRecord:
     """One input-target pair."""
 
     input_time: datetime
+    background_time: datetime
     target_time: datetime
+
     input_path: Path
+    background_path: Path
     target_path: Path
 
 
@@ -108,19 +119,54 @@ def _read_manifest(path: Path, data_root: Path) -> tuple[PairRecord, ...]:
                     + ", ".join(empty)
                 )
 
-            input_time = _parse_time(values["input_time"], row_number, "input_time")
-            target_time = _parse_time(values["target_time"], row_number, "target_time")
+            input_time = _parse_time(
+                values["input_time"],
+                row_number,
+                "input_time",
+            )
+
+            background_time = _parse_time(
+                values["background_time"],
+                row_number,
+                "background_time",
+            )
+
+            target_time = _parse_time(
+                values["target_time"],
+                row_number,
+                "target_time",
+            )
+
+            if background_time != input_time:
+                raise ValueError(
+                    f"Manifest row {row_number} has background_time "
+                    f"{background_time.isoformat()}, but input_time is "
+                    f"{input_time.isoformat()}."
+                )
+
             if target_time <= input_time:
                 raise ValueError(
-                    f"Manifest row {row_number} must have target_time after input_time."
+                    f"Manifest row {row_number} must have target_time "
+                    "after input_time."
                 )
 
             records.append(
                 PairRecord(
                     input_time=input_time,
+                    background_time=background_time,
                     target_time=target_time,
-                    input_path=_resolve_path(values["input_file"], data_root),
-                    target_path=_resolve_path(values["target_file"], data_root),
+                    input_path=_resolve_path(
+                        values["input_file"],
+                        data_root,
+                    ),
+                    background_path=_resolve_path(
+                        values["background_file"],
+                        data_root,
+                    ),
+                    target_path=_resolve_path(
+                        values["target_file"],
+                        data_root,
+                    ),
                 )
             )
 
@@ -152,16 +198,40 @@ class RegressionDatasetAdapter(StormCastDataset):
         manifest_name = "train_manifest" if train else "validation_manifest"
 
         try:
-            manifest_path = _resolve_path(getattr(params, manifest_name), data_root)
-            normalisation_path = _resolve_path(params.normalisation_path, data_root)
+            manifest_path = _resolve_path(
+                getattr(params, manifest_name),
+                data_root,
+            )
+
+            normalisation_path = _resolve_path(
+                params.normalisation_path,
+                data_root,
+            )
+
+            background_normalisation_path = _resolve_path(
+                params.background_normalisation_path,
+                data_root,
+            )
+
         except AttributeError as error:
             raise ValueError(
                 f"Missing required dataset parameter: {error.name}"
             ) from error
 
         self._records = _read_manifest(manifest_path, data_root)
+
+        # SINGV statistics and metadata.
         self._load_normalisation(normalisation_path)
         self._load_metadata(self._records[0].input_path)
+
+        # ERA5 statistics and metadata.
+        self._load_background_normalisation(
+            background_normalisation_path
+        )
+        self._load_background_metadata(
+            self._records[0].background_path,
+            self._records[0].background_time,
+        )
 
     def _load_normalisation(self, path: Path) -> None:
         """Load channel statistics and image metadata."""
@@ -203,6 +273,100 @@ class RegressionDatasetAdapter(StormCastDataset):
 
         self._mean_3d = self._mean[:, None, None]
         self._std_3d = self._std[:, None, None]
+
+    def _load_background_normalisation(self, path: Path) -> None:
+        """Load ERA5 background normalization statistics."""
+
+        with np.load(path) as data:
+            required = {"channels", "mean", "std", "image_shape"}
+            missing = sorted(required.difference(data.files))
+
+            if missing:
+                raise ValueError(
+                    f"{path} is missing required array(s): "
+                    + ", ".join(missing)
+                )
+
+            self._background_channels = _decode_strings(
+                data["channels"]
+            )
+            self._background_mean = np.asarray(
+                data["mean"],
+                dtype=np.float32,
+            )
+            self._background_std = np.asarray(
+                data["std"],
+                dtype=np.float32,
+            )
+            image_shape = np.asarray(
+                data["image_shape"],
+                dtype=np.int64,
+            )
+
+        if not self._background_channels:
+            raise ValueError(
+                f"{path}: no ERA5 background channels were found."
+            )
+
+        if len(self._background_channels) != 26:
+            raise ValueError(
+                f"{path}: expected 26 ERA5 background channels, got "
+                f"{len(self._background_channels)}."
+            )
+
+        expected_shape = (len(self._background_channels),)
+
+        if (
+            self._background_mean.shape != expected_shape
+            or self._background_std.shape != expected_shape
+        ):
+            raise ValueError(
+                f"{path}: ERA5 mean and std must both have shape "
+                f"{expected_shape}."
+            )
+
+        if image_shape.shape != (2,):
+            raise ValueError(
+                f"{path}: image_shape must have shape (2,)."
+            )
+
+        background_image_shape = (
+            int(image_shape[0]),
+            int(image_shape[1]),
+        )
+
+        if background_image_shape != self._image_shape:
+            raise ValueError(
+                f"{path}: ERA5 image shape {background_image_shape} "
+                f"does not match SINGV image shape "
+                f"{self._image_shape}."
+            )
+
+        if not np.all(np.isfinite(self._background_mean)):
+            raise ValueError(
+                f"{path}: ERA5 means must all be finite."
+            )
+
+        if (
+            not np.all(np.isfinite(self._background_std))
+            or np.any(self._background_std <= 0)
+        ):
+            raise ValueError(
+                f"{path}: ERA5 standard deviations must be "
+                "finite and positive."
+            )
+
+        self._background_shape = (
+            len(self._background_channels),
+            *self._image_shape,
+        )
+
+        self._background_mean_3d = (
+            self._background_mean[:, None, None]
+        )
+        self._background_std_3d = (
+            self._background_std[:, None, None]
+        )
 
     def _load_metadata(self, path: Path) -> None:
         """Validate the first prepared state and load its coordinate grids."""
@@ -268,6 +432,177 @@ class RegressionDatasetAdapter(StormCastDataset):
 
         return state
 
+    def _load_background(
+        self,
+        path: Path,
+        expected_time: datetime,
+    ) -> np.ndarray:
+        """Load one prepared ERA5 background."""
+
+        with xr.open_dataset(path) as dataset:
+            required = {"background", "channel", "time"}
+            missing = sorted(
+                required.difference(dataset.variables)
+            )
+
+            if missing:
+                raise ValueError(
+                    f"{path} is missing: " + ", ".join(missing)
+                )
+
+            variable = dataset["background"]
+
+            if tuple(variable.dims) != EXPECTED_BACKGROUND_DIMS:
+                raise ValueError(
+                    f"{path}: background must have dimensions "
+                    f"{EXPECTED_BACKGROUND_DIMS}, got "
+                    f"{tuple(variable.dims)}."
+                )
+
+            if variable.sizes["time"] != 1:
+                raise ValueError(
+                    f"{path}: expected exactly one ERA5 time step, "
+                    f"got {variable.sizes['time']}."
+                )
+
+            channels = _decode_strings(
+                dataset["channel"].values
+            )
+
+            if channels != self._background_channels:
+                raise ValueError(
+                    f"{path}: ERA5 channel names or order do not "
+                    "match the ERA5 normalization file."
+                )
+
+            normalization = str(
+                dataset.attrs.get("normalization", "")
+            ).lower()
+
+            if normalization != "none":
+                raise ValueError(
+                    f"{path}: expected normalization='none', got "
+                    f"{dataset.attrs.get('normalization')!r}."
+                )
+
+            file_time = np.asarray(
+                dataset["time"].values
+            ).reshape(-1)[0]
+
+            expected_time_np = np.datetime64(
+                expected_time.isoformat(),
+                "ns",
+            )
+            file_time_np = np.datetime64(file_time, "ns")
+
+            if file_time_np != expected_time_np:
+                raise ValueError(
+                    f"{path}: file time {file_time_np} does not "
+                    f"match manifest background_time "
+                    f"{expected_time_np}."
+                )
+
+            background = np.asarray(
+                variable.isel(time=0).values,
+                dtype=np.float32,
+            )
+
+        if background.shape != self._background_shape:
+            raise ValueError(
+                f"{path}: expected ERA5 background shape "
+                f"{self._background_shape}, got "
+                f"{background.shape}."
+            )
+
+        if not np.all(np.isfinite(background)):
+            locations = np.argwhere(~np.isfinite(background))
+            first = tuple(int(value) for value in locations[0])
+            channel_name = self._background_channels[first[0]]
+
+            raise ValueError(
+                f"{path}: ERA5 contains a non-finite value at "
+                f"(channel={first[0]} [{channel_name}], "
+                f"y={first[1]}, x={first[2]})."
+            )
+
+        return background
+
+    def _load_background_metadata(
+        self,
+        path: Path,
+        expected_time: datetime,
+    ) -> None:
+        """Validate the first ERA5 file and its coordinate grid."""
+
+        # Validate the data, timestamp, channels and dimensions.
+        self._load_background(path, expected_time)
+
+        with xr.open_dataset(path) as dataset:
+            required = {"latitude", "longitude"}
+            missing = sorted(
+                required.difference(dataset.variables)
+            )
+
+            if missing:
+                raise ValueError(
+                    f"{path} is missing: " + ", ".join(missing)
+                )
+
+            latitude = np.asarray(
+                dataset["latitude"].values,
+                dtype=np.float32,
+            )
+            longitude = np.asarray(
+                dataset["longitude"].values,
+                dtype=np.float32,
+            )
+
+            if latitude.ndim == 1 and longitude.ndim == 1:
+                longitude, latitude = np.meshgrid(
+                    longitude,
+                    latitude,
+                )
+
+        if (
+            latitude.shape != self._image_shape
+            or longitude.shape != self._image_shape
+        ):
+            raise ValueError(
+                f"{path}: ERA5 latitude and longitude must "
+                f"both have shape {self._image_shape}."
+            )
+
+        if (
+            not np.all(np.isfinite(latitude))
+            or not np.all(np.isfinite(longitude))
+        ):
+            raise ValueError(
+                f"{path}: ERA5 coordinates contain "
+                "non-finite values."
+            )
+
+        if not np.allclose(
+            latitude,
+            self._latitude,
+            rtol=0.0,
+            atol=1.0e-6,
+        ):
+            raise ValueError(
+                f"{path}: ERA5 latitude grid does not match "
+                "the SINGV grid."
+            )
+
+        if not np.allclose(
+            longitude,
+            self._longitude,
+            rtol=0.0,
+            atol=1.0e-6,
+        ):
+            raise ValueError(
+                f"{path}: ERA5 longitude grid does not match "
+                "the SINGV grid."
+            )
+
     def _normalize_and_fill(
         self, state: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -277,6 +612,27 @@ class RegressionDatasetAdapter(StormCastDataset):
         normalized = (state - self._mean_3d) / self._std_3d
         normalized[~valid] = 0.0
         return normalized, valid.astype(np.float32)
+
+    def _normalize_background(
+        self,
+        background: np.ndarray,
+    ) -> np.ndarray:
+        """Normalize one complete ERA5 background."""
+
+        normalized = (
+            background - self._background_mean_3d
+        ) / self._background_std_3d
+
+        if not np.all(np.isfinite(normalized)):
+            raise ValueError(
+                "Normalized ERA5 background contains "
+                "non-finite values."
+            )
+
+        return normalized.astype(
+            np.float32,
+            copy=False,
+        )
 
     def __len__(self) -> int:
         """Return the number of input-target pairs."""
@@ -294,17 +650,24 @@ class RegressionDatasetAdapter(StormCastDataset):
             self._load_state(record.target_path)
         )
 
+        background = self._normalize_background(
+            self._load_background(
+                record.background_path,
+                record.background_time,
+            )
+        )
+
         return {
-            "background": np.empty((0, *self._image_shape), dtype=np.float32),
+            "background": background,
             "state": (input_state, target_state),
             "input_mask": input_mask,
             "target_mask": target_mask,
         }
 
     def background_channels(self) -> list[str]:
-        """Return no background channels."""
+        """Return the ERA5 background channel names."""
 
-        return []
+        return list(self._background_channels)
 
     def state_channels(self) -> list[str]:
         """Return the SINGV state channel names."""
@@ -359,6 +722,63 @@ class RegressionDatasetAdapter(StormCastDataset):
 
         x = np.asarray(x, dtype=np.float32)
         mean, std = self._state_statistics_for(x)
+        return x * std + mean
+
+    def _background_statistics_for(
+        self,
+        x: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return broadcastable ERA5 statistics."""
+
+        num_channels = len(self._background_channels)
+
+        if x.ndim == 3:
+            channel_axis = 0
+            shape = (num_channels, 1, 1)
+
+        elif x.ndim == 4:
+            channel_axis = 1
+            shape = (1, num_channels, 1, 1)
+
+        else:
+            raise ValueError(
+                "Expected a 3-D or 4-D ERA5 array, "
+                f"got shape {x.shape}."
+            )
+
+        if x.shape[channel_axis] != num_channels:
+            raise ValueError(
+                f"Expected {num_channels} ERA5 channels, "
+                f"got shape {x.shape}."
+            )
+
+        return (
+            self._background_mean.reshape(shape),
+            self._background_std.reshape(shape),
+        )
+
+
+    def normalize_background(
+        self,
+        x: np.ndarray,
+    ) -> np.ndarray:
+        """Convert physical ERA5 values to normalized values."""
+
+        x = np.asarray(x, dtype=np.float32)
+        mean, std = self._background_statistics_for(x)
+
+        return (x - mean) / std
+
+
+    def denormalize_background(
+        self,
+        x: np.ndarray,
+    ) -> np.ndarray:
+        """Convert normalized ERA5 values to physical units."""
+
+        x = np.asarray(x, dtype=np.float32)
+        mean, std = self._background_statistics_for(x)
+
         return x * std + mean
 
     def index_for_time(self, input_time: datetime) -> int:
