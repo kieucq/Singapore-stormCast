@@ -23,13 +23,15 @@ model:
   # Conditions used by the frozen regression model.
   regression_conditions:
     - state
+    - background
 
   # Conditions supplied to the diffusion model.
   diffusion_conditions:
     - state
+    - background
     - regression
 
-  regression_weights: /scratch/users/nus/e1155933/retraining/runs/singv-regression-10years/training-100000steps/checkpoints_regression/StormCastUNet.0.100000.mdlus
+  regression_weights: /scratch/users/nus/e1155933/retraining/runs/singv-era5-regression-10years/training-100000steps/checkpoints_regression/StormCastUNet.0.100000.mdlus
 
   spatial_pos_embed: false
 
@@ -44,9 +46,11 @@ model:
 
 training:
   outdir: /scratch/users/nus/e1155933/retraining/runs
-  experiment_name: singv-diffusion-10years
+  experiment_name: singv-era5-diffusion-10years
   run_id: training-100000steps-bf16-compile
   rundir: ${training.outdir}/${training.experiment_name}/${training.run_id}
+
+  initial_weights: null
 
   # Retain the conservative loader configuration used by the
   # successful regression and diffusion smoke-test runs.
@@ -66,8 +70,8 @@ training:
   print_progress_freq: 20
 
   # Frequent checkpoints allow the run to resume across PBS jobs.
-  checkpoint_freq: 1000
-  validation_freq: 1000
+  checkpoint_freq: 5000
+  validation_freq: 5000
   validation_steps: 1
 
   perf:
@@ -80,10 +84,14 @@ training:
   validation_plot_variables:
     - tas
     - pr
+    - ta_1000
+    - ua_1000
     - ta_850
-    - hus_850
+    - zg_500
 
-  validation_plot_background_variables: []
+  validation_plot_background_variables:
+    - t2m
+    - mslp
 
   log_to_wandb: false
 

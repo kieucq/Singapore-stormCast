@@ -14,3 +14,4 @@ train_manifest: manifests/training_19950101_20041231.csv
 validation_manifest: manifests/validation_20050101_20051231.csv
 
 normalisation_path: normalisation_stats/training_19950101_20041231_normalisation_stats.npz
+background_normalisation_path: normalisation_stats/training_19950101_20041231_background_normalisation_stats.npz
