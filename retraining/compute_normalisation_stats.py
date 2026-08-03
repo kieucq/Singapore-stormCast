@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Compute per-channel normalization statistics for prepared SINGV state files.
+Compute separate per-channel normalization statistics for prepared SINGV
+states and prepared ERA5 backgrounds.
 
 This script reads a CSV manifest describing six-hour input-target state pairs,
 collects every unique prepared state referenced by the manifest, and computes
@@ -11,15 +12,16 @@ Input
 manifest : positional argument
     Path to a CSV file containing the columns:
 
-        input_time,input_file,target_time,target_file
+        input_time,input_file,background_time,background_file,target_time,target_file
 
     Example row:
 
         1995-01-01T01:00:00,prepared/prepared_19950101_0100.nc,
         1995-01-01T07:00:00,prepared/prepared_19950101_0700.nc
 
-    Only the ``input_file`` and ``target_file`` columns are used. Relative file
-    paths are resolved against ``--data-root``.
+    The ``input_file`` and ``target_file`` columns are used for SINGV
+    statistics. The ``background_file`` column is used for ERA5 statistics.
+    Relative paths are resolved against ``--data-root``.
 
 --data-root : optional
     Root directory used to resolve relative paths in the manifest.
@@ -64,20 +66,14 @@ accumulators, so the full dataset is never loaded into memory.
 
 Output
 ------
-Two files are generated automatically from the manifest name and written to
+Four files are generated automatically from the manifest name and written to
 ``--output-dir``:
 
-    <manifest-prefix>_normalisation_stats.csv
     <manifest-prefix>_normalisation_stats.npz
+    <manifest-prefix>_normalisation_stats.csv
 
-For example:
-
-    week_1995_01_pairs.csv
-
-produces:
-
-    week_1995_01_normalisation_stats.npz
-    week_1995_01_normalisation_stats.csv
+    <manifest-prefix>_background_normalisation_stats.npz
+    <manifest-prefix>_background_normalisation_stats.csv
 
 The NPZ file contains machine-readable arrays for channel names, count, valid
 fraction, mean, standard deviation, raw and normalized extrema, image shape,
@@ -103,8 +99,46 @@ import xarray as xr
 SURFACE_CHANNELS = ("tas", "uas", "vas", "psl", "pr")
 PRESSURE_PREFIXES = ("ta", "ua", "va", "hus", "zg")
 
-EXPECTED_MANIFEST_COLUMNS = ("input_file", "target_file")
+STATE_FILE_COLUMNS = ("input_file", "target_file")
+BACKGROUND_FILE_COLUMNS = ("background_file",)
+
+REQUIRED_MANIFEST_COLUMNS = (
+    "input_file",
+    "background_file",
+    "target_file",
+)
+
 EXPECTED_STATE_DIMS = ("time", "channel", "y", "x")
+EXPECTED_BACKGROUND_DIMS = ("time", "channel", "y", "x")
+
+EXPECTED_BACKGROUND_CHANNELS = (
+    "u_1000",
+    "u_850",
+    "u_500",
+    "u_250",
+    "v_1000",
+    "v_850",
+    "v_500",
+    "v_250",
+    "z_1000",
+    "z_850",
+    "z_500",
+    "z_250",
+    "t_1000",
+    "t_850",
+    "t_500",
+    "t_250",
+    "q_1000",
+    "q_850",
+    "q_500",
+    "q_250",
+    "u10",
+    "v10",
+    "t2m",
+    "tcwv",
+    "mslp",
+    "sp",
+)
 
 DEFAULT_DATA_ROOT = Path("~/scratch/retraining")
 DEFAULT_OUTPUT_DIR = DEFAULT_DATA_ROOT / "normalisation_stats"
@@ -265,13 +299,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Compute per-channel normalization statistics from prepared SINGV "
-            "NetCDF state files referenced by a six-hour pair manifest."
+            "NetCDF states and ERA5 backgrounds referenced by a six-hour pair manifest."
         )
     )
     parser.add_argument(
         "manifest",
         type=Path,
-        help="CSV manifest containing input_file and target_file columns.",
+        help="CSV manifest containing input_file, background_file and target_file columns.",
     )
     parser.add_argument(
         "--data-root",
@@ -291,7 +325,22 @@ def parse_args() -> argparse.Namespace:
             "written. Default: ~/scratch/retraining/normalisation_stats"
         ),
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=100,
+        help=(
+            "Print progress every N files; use 0 to print only the first "
+            "and final files. Default: 100"
+        ),
+    )
+
+    args = parser.parse_args()
+
+    if args.progress_every < 0:
+        parser.error("--progress-every must be non-negative.")
+
+    return args
 
 
 def normalize_path(path: Path) -> Path:
@@ -303,20 +352,32 @@ def normalize_path(path: Path) -> Path:
 def derive_output_paths(
     manifest_path: Path,
     output_dir: Path,
-) -> tuple[Path, Path]:
-    """Generate output filenames from the manifest filename.
-
-    For example, ``week_1995_01_pairs.csv`` becomes:
-
-    - ``week_1995_01_normalisation_stats.npz``
-    - ``week_1995_01_normalisation_stats.csv``
-    """
+) -> tuple[Path, Path, Path, Path]:
+    """Generate SINGV and ERA5 statistics filenames."""
 
     base_name = manifest_path.stem.removesuffix("_pairs")
 
+    state_npz_path = (
+        output_dir / f"{base_name}_normalisation_stats.npz"
+    )
+    state_csv_path = (
+        output_dir / f"{base_name}_normalisation_stats.csv"
+    )
+
+    background_npz_path = (
+        output_dir
+        / f"{base_name}_background_normalisation_stats.npz"
+    )
+    background_csv_path = (
+        output_dir
+        / f"{base_name}_background_normalisation_stats.csv"
+    )
+
     return (
-        output_dir / f"{base_name}_normalisation_stats.npz",
-        output_dir / f"{base_name}_normalisation_stats.csv",
+        state_npz_path,
+        state_csv_path,
+        background_npz_path,
+        background_csv_path,
     )
 
 
@@ -334,7 +395,7 @@ def read_manifest_rows(manifest_path: Path) -> list[dict[str, str]]:
 
         missing_columns = [
             column
-            for column in EXPECTED_MANIFEST_COLUMNS
+            for column in REQUIRED_MANIFEST_COLUMNS
             if column not in reader.fieldnames
         ]
         if missing_columns:
@@ -349,7 +410,7 @@ def read_manifest_rows(manifest_path: Path) -> list[dict[str, str]]:
         raise ValueError(f"Manifest contains no data rows: {manifest_path}")
 
     for row_number, row in enumerate(rows, start=2):
-        for column in EXPECTED_MANIFEST_COLUMNS:
+        for column in REQUIRED_MANIFEST_COLUMNS:
             value = (row.get(column) or "").strip()
             if not value:
                 raise ValueError(
@@ -359,20 +420,23 @@ def read_manifest_rows(manifest_path: Path) -> list[dict[str, str]]:
     return rows
 
 
-def collect_unique_state_paths(
+def collect_unique_paths(
     rows: Iterable[dict[str, str]],
+    columns: Sequence[str],
     data_root: Path,
 ) -> list[Path]:
-    """Collect unique input and target paths while preserving first occurrence."""
+    """Collect unique paths from selected manifest columns."""
 
     unique_paths: list[Path] = []
     seen: set[Path] = set()
 
     for row in rows:
-        for column in EXPECTED_MANIFEST_COLUMNS:
+        for column in columns:
             path = Path(row[column].strip()).expanduser()
+
             if not path.is_absolute():
                 path = data_root / path
+
             path = path.resolve()
 
             if path not in seen:
@@ -508,6 +572,11 @@ def load_and_validate_state(
             int(state_variable.sizes["y"]),
             int(state_variable.sizes["x"]),
         )
+        if image_shape != (624, 624):
+            raise ValueError(
+                f"{path}: expected SINGV spatial shape (624, 624), "
+                f"got {image_shape}."
+            )
         metadata = DatasetMetadata(
             channel_names=channel_names,
             image_shape=image_shape,
@@ -558,6 +627,138 @@ def load_and_validate_state(
     )
 
     return state, metadata
+
+
+def load_and_validate_background(
+    path: Path,
+    expected_metadata: DatasetMetadata | None,
+) -> tuple[np.ndarray, DatasetMetadata]:
+    """Load one prepared ERA5 background and validate its schema."""
+
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Prepared ERA5 background does not exist: {path}"
+        )
+
+    with xr.open_dataset(path) as dataset:
+        if "background" not in dataset:
+            raise ValueError(
+                f"{path} does not contain a 'background' variable."
+            )
+
+        if "channel" not in dataset:
+            raise ValueError(
+                f"{path} does not contain a 'channel' coordinate."
+            )
+
+        background_variable = dataset["background"]
+        actual_dims = tuple(background_variable.dims)
+
+        if actual_dims != EXPECTED_BACKGROUND_DIMS:
+            raise ValueError(
+                f"{path}: expected background dimensions "
+                f"{EXPECTED_BACKGROUND_DIMS}, got {actual_dims}."
+            )
+
+        if background_variable.sizes["time"] != 1:
+            raise ValueError(
+                f"{path}: expected exactly one background time step, got "
+                f"{background_variable.sizes['time']}."
+            )
+
+        channel_names = decode_channel_names(
+            dataset["channel"].values
+        )
+
+        if channel_names != EXPECTED_BACKGROUND_CHANNELS:
+            raise ValueError(
+                f"{path}: ERA5 channel names or order do not match the "
+                "expected 26-channel background definition."
+            )
+
+        expected_channel_count = background_variable.sizes["channel"]
+
+        if len(channel_names) != expected_channel_count:
+            raise ValueError(
+                f"{path}: channel coordinate contains "
+                f"{len(channel_names)} names but background has "
+                f"{expected_channel_count} channels."
+            )
+
+        image_shape = (
+            int(background_variable.sizes["y"]),
+            int(background_variable.sizes["x"]),
+        )
+
+        if image_shape != (624, 624):
+            raise ValueError(
+                f"{path}: expected ERA5 spatial shape (624, 624), "
+                f"got {image_shape}."
+            )
+
+        metadata = DatasetMetadata(
+            channel_names=channel_names,
+            image_shape=image_shape,
+        )
+
+        if expected_metadata is not None:
+            if metadata.channel_names != expected_metadata.channel_names:
+                raise ValueError(
+                    f"{path}: ERA5 channel names or order do not match "
+                    "the first background file."
+                )
+
+            if metadata.image_shape != expected_metadata.image_shape:
+                raise ValueError(
+                    f"{path}: spatial shape {metadata.image_shape} does "
+                    f"not match expected shape "
+                    f"{expected_metadata.image_shape}."
+                )
+
+        normalization = str(
+            dataset.attrs.get("normalization", "")
+        ).lower()
+
+        if normalization != "none":
+            raise ValueError(
+                f"{path}: expected normalization='none', but got "
+                f"{dataset.attrs.get('normalization')!r}."
+            )
+
+        background = np.asarray(
+            background_variable.isel(time=0).values
+        )
+
+    expected_shape = (
+        len(metadata.channel_names),
+        metadata.image_shape[0],
+        metadata.image_shape[1],
+    )
+
+    if background.shape != expected_shape:
+        raise ValueError(
+            f"{path}: expected loaded background shape "
+            f"{expected_shape}, got {background.shape}."
+        )
+
+    if not np.issubdtype(background.dtype, np.number):
+        raise TypeError(
+            f"{path}: background dtype must be numeric, got "
+            f"{background.dtype}."
+        )
+
+    if not np.all(np.isfinite(background)):
+        locations = np.argwhere(~np.isfinite(background))
+        first = tuple(int(value) for value in locations[0])
+        channel_name = metadata.channel_names[first[0]]
+
+        raise ValueError(
+            f"{path}: background contains a non-finite value at "
+            f"(channel={first[0]} [{channel_name}], "
+            f"y={first[1]}, x={first[2]})."
+        )
+
+    return background, metadata
 
 
 def compute_derived_statistics(
@@ -678,6 +879,8 @@ def write_summary_csv(
 
 def print_summary(
     *,
+    title: str,
+    file_count_label: str,
     manifest_path: Path,
     num_manifest_rows: int,
     num_states: int,
@@ -686,7 +889,7 @@ def print_summary(
     output_path: Path,
     summary_csv_path: Path,
 ) -> None:
-    """Print an execution summary and formatted per-channel table."""
+    """Print one normalization-statistics summary."""
 
     derived = compute_derived_statistics(
         metadata,
@@ -695,22 +898,24 @@ def print_summary(
     )
 
     print()
-    print("SINGV NORMALIZATION STATISTICS")
-    print("==============================")
+    print(title)
+    print("=" * len(title))
     print(f"Manifest:             {manifest_path}")
     print(f"Manifest rows:        {num_manifest_rows}")
-    print(f"Unique states:        {num_states}")
+    print(f"{file_count_label}: {num_states}")
     print(f"Channels:             {len(metadata.channel_names)}")
     print(
         f"Image shape:          "
-        f"{metadata.image_shape[0]} x {metadata.image_shape[1]}"
+        f"{metadata.image_shape[0]} x "
+        f"{metadata.image_shape[1]}"
     )
     print(f"Output NPZ:           {output_path}")
     print(f"Output summary CSV:   {summary_csv_path}")
     print()
     print(
-        f"{'Idx':>3}  {'Channel':<14} {'Count':>12} {'Valid':>9} "
-        f"{'Mean':>14} {'Std':>14} {'Norm min':>12} {'Norm max':>12}"
+        f"{'Idx':>3}  {'Channel':<14} {'Count':>12} "
+        f"{'Valid':>9} {'Mean':>14} {'Std':>14} "
+        f"{'Norm min':>12} {'Norm max':>12}"
     )
     print("-" * 106)
 
@@ -727,8 +932,24 @@ def print_summary(
         )
 
 
+def should_print_progress(
+    index: int,
+    total: int,
+    progress_every: int,
+) -> bool:
+    """Return whether progress should be printed for this file."""
+
+    if index == 1 or index == total:
+        return True
+
+    return (
+        progress_every > 0
+        and index % progress_every == 0
+    )
+
+
 def main() -> None:
-    """Run the normalization-statistics workflow."""
+    """Compute separate SINGV and ERA5 normalization statistics."""
 
     args = parse_args()
 
@@ -738,73 +959,216 @@ def main() -> None:
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    output_path, summary_csv_path = derive_output_paths(
+    (
+        state_output_path,
+        state_summary_csv_path,
+        background_output_path,
+        background_summary_csv_path,
+    ) = derive_output_paths(
         manifest_path,
         output_dir,
     )
 
     rows = read_manifest_rows(manifest_path)
-    state_paths = collect_unique_state_paths(rows, data_root)
+
+    state_paths = collect_unique_paths(
+        rows,
+        STATE_FILE_COLUMNS,
+        data_root,
+    )
+    background_paths = collect_unique_paths(
+        rows,
+        BACKGROUND_FILE_COLUMNS,
+        data_root,
+    )
 
     if not state_paths:
-        raise ValueError("No prepared state paths were found in the manifest.")
-
-    print("Collecting SINGV normalization statistics")
-    print("------------------------------------------")
-    print(f"Manifest rows: {len(rows)}")
-    print(f"Unique states: {len(state_paths)}")
-
-    first_state, metadata = load_and_validate_state(state_paths[0], None)
-    running_stats = RunningChannelStats(metadata.channel_names)
-    running_stats.update(first_state)
-
-    print(f"Channels:      {len(metadata.channel_names)}")
-    print(
-        f"Image shape:   "
-        f"{metadata.image_shape[0]} x {metadata.image_shape[1]}"
-    )
-
-    progress_width = len(str(len(state_paths)))
-
-    print(
-        f"[{1:>{progress_width}}/{len(state_paths)}] "
-        f"{state_paths[0]}"
-    )
-
-    for index, state_path in enumerate(state_paths[1:], start=2):
-        state, _ = load_and_validate_state(state_path, metadata)
-        running_stats.update(state)
-
-        print(
-            f"[{index:>{progress_width}}/{len(state_paths)}] "
-            f"{state_path}"
+        raise ValueError(
+            "No prepared SINGV state paths were found in the manifest."
         )
 
-    statistics = running_stats.finalize()
+    if not background_paths:
+        raise ValueError(
+            "No prepared ERA5 background paths were found in the manifest."
+        )
+
+    print("NORMALIZATION STATISTICS")
+    print("========================")
+    print(f"Manifest:                {manifest_path}")
+    print(f"Manifest rows:           {len(rows)}")
+    print(f"Unique SINGV states:     {len(state_paths)}")
+    print(f"Unique ERA5 backgrounds: {len(background_paths)}")
+
+    # ------------------------------------------------------------------
+    # SINGV state statistics
+    # ------------------------------------------------------------------
+
+    print()
+    print("Collecting SINGV state statistics")
+    print("---------------------------------")
+
+    first_state, state_metadata = load_and_validate_state(
+        state_paths[0],
+        None,
+    )
+
+    state_running_stats = RunningChannelStats(
+        state_metadata.channel_names
+    )
+    state_running_stats.update(first_state)
+
+    state_progress_width = len(str(len(state_paths)))
+
+    if should_print_progress(
+        1,
+        len(state_paths),
+        args.progress_every,
+    ):
+        print(
+            f"[{1:>{state_progress_width}}/{len(state_paths)}] "
+            f"{state_paths[0]}"
+        )
+
+    for index, state_path in enumerate(
+        state_paths[1:],
+        start=2,
+    ):
+        state, _ = load_and_validate_state(
+            state_path,
+            state_metadata,
+        )
+        state_running_stats.update(state)
+
+        if should_print_progress(
+            index,
+            len(state_paths),
+            args.progress_every,
+        ):
+            print(
+                f"[{index:>{state_progress_width}}/"
+                f"{len(state_paths)}] {state_path}"
+            )
+
+    state_statistics = state_running_stats.finalize()
+
+    # ------------------------------------------------------------------
+    # ERA5 background statistics
+    # ------------------------------------------------------------------
+
+    print()
+    print("Collecting ERA5 background statistics")
+    print("--------------------------------------")
+
+    first_background, background_metadata = (
+        load_and_validate_background(
+            background_paths[0],
+            None,
+        )
+    )
+
+    if background_metadata.image_shape != state_metadata.image_shape:
+        raise ValueError(
+            "ERA5 background image shape "
+            f"{background_metadata.image_shape} does not match SINGV "
+            f"state image shape {state_metadata.image_shape}."
+        )
+
+    background_running_stats = RunningChannelStats(
+        background_metadata.channel_names
+    )
+    background_running_stats.update(first_background)
+
+    background_progress_width = len(str(len(background_paths)))
+
+    if should_print_progress(
+        1,
+        len(background_paths),
+        args.progress_every,
+    ):
+        print(
+            f"[{1:>{background_progress_width}}/"
+            f"{len(background_paths)}] "
+            f"{background_paths[0]}"
+        )
+
+    for index, background_path in enumerate(
+        background_paths[1:],
+        start=2,
+    ):
+        background, _ = load_and_validate_background(
+            background_path,
+            background_metadata,
+        )
+        background_running_stats.update(background)
+
+        if should_print_progress(
+            index,
+            len(background_paths),
+            args.progress_every,
+        ):
+            print(
+                f"[{index:>{background_progress_width}}/"
+                f"{len(background_paths)}] {background_path}"
+            )
+
+    background_statistics = background_running_stats.finalize()
+
+    # ------------------------------------------------------------------
+    # Write both statistics sets
+    # ------------------------------------------------------------------
 
     write_npz(
-        output_path,
-        metadata,
-        statistics,
+        state_output_path,
+        state_metadata,
+        state_statistics,
         num_states=len(state_paths),
         num_manifest_rows=len(rows),
         manifest_path=manifest_path,
     )
     write_summary_csv(
-        summary_csv_path,
-        metadata,
-        statistics,
+        state_summary_csv_path,
+        state_metadata,
+        state_statistics,
         num_states=len(state_paths),
     )
 
+    write_npz(
+        background_output_path,
+        background_metadata,
+        background_statistics,
+        num_states=len(background_paths),
+        num_manifest_rows=len(rows),
+        manifest_path=manifest_path,
+    )
+    write_summary_csv(
+        background_summary_csv_path,
+        background_metadata,
+        background_statistics,
+        num_states=len(background_paths),
+    )
+
     print_summary(
+        title="SINGV STATE NORMALIZATION STATISTICS",
+        file_count_label="Unique SINGV states",
         manifest_path=manifest_path,
         num_manifest_rows=len(rows),
         num_states=len(state_paths),
-        metadata=metadata,
-        statistics=statistics,
-        output_path=output_path,
-        summary_csv_path=summary_csv_path,
+        metadata=state_metadata,
+        statistics=state_statistics,
+        output_path=state_output_path,
+        summary_csv_path=state_summary_csv_path,
+    )
+
+    print_summary(
+        title="ERA5 BACKGROUND NORMALIZATION STATISTICS",
+        file_count_label="Unique ERA5 backgrounds",
+        manifest_path=manifest_path,
+        num_manifest_rows=len(rows),
+        num_states=len(background_paths),
+        metadata=background_metadata,
+        statistics=background_statistics,
+        output_path=background_output_path,
+        summary_csv_path=background_summary_csv_path,
     )
 
 
