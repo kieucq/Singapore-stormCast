@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Assemble one native-grid SINGV state for StormCast retraining.
+Assemble one native-grid SINGV state for StormCast preprocessing/training.
 
 The script finds the required surface and pressure-level archive files,
 extracts one requested valid time, combines the variables, and writes one
@@ -18,7 +18,9 @@ python assemble_state.py \
 
 Default output
 --------------
-~/scratch/retraining/assembled/assembled_20141201_0100.nc
+The assembled output directory configured in paths.py, with filename:
+
+assembled_20141201_0100.nc
 
 Pressure-level variables are available every six hours at 01/07/13/19 UTC.
 Surface variables are available hourly. The requested hour must therefore be
@@ -33,15 +35,9 @@ from datetime import datetime
 import numpy as np
 import xarray as xr
 
-# ── Configuration ──────────────────────────────────────────────────────────
+import paths
 
-BASE_DIR = Path(
-    "/home/project/13004327/data_service/model_data/V3_Historical/"
-    "V3-WMC-2/CCRS/ERA5/historical/reanalysis/SINGV-RCM/vn5"
-)
-
-RETRAINING_DIR = Path("~/scratch/retraining").expanduser()
-OUTPUT_DIR = RETRAINING_DIR / "assembled"
+# ── State specification ──────────────────────────────────────────────────────────
 
 # Variables required for each assembled state
 
@@ -62,7 +58,7 @@ def find_surface_file(varname: str, dt: datetime) -> Path:
     yyyymmdd = dt.strftime("%Y%m%d")
     pattern = f"{varname}_*_1hr_{yyyymmdd}0000-{yyyymmdd}2300.nc"
 
-    directory = BASE_DIR / "1hr" / varname / yyyymm
+    directory = paths.SINGV_ARCHIVE_ROOT / "1hr" / varname / yyyymm
     matches = sorted(directory.glob(pattern))
 
     if not matches:
@@ -82,7 +78,7 @@ def find_pressure_file(varname: str, dt: datetime) -> Path:
     yyyymmdd = dt.strftime("%Y%m%d")
     pattern = f"{varname}_*_6hr_{yyyymmdd}0100-{yyyymmdd}1900.nc"
 
-    directory = BASE_DIR / "6hr" / varname / yyyymm
+    directory = paths.SINGV_ARCHIVE_ROOT / "6hr" / varname / yyyymm
     matches = sorted(directory.glob(pattern))
 
     if not matches:
@@ -195,7 +191,7 @@ def assemble_state(
 
 def default_output_path(dt: datetime) -> Path:
     filename = f"assembled_{dt.strftime('%Y%m%d_%H%M')}.nc"
-    return OUTPUT_DIR / filename
+    return paths.ASSEMBLED_DIR / filename
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -215,8 +211,7 @@ def main():
         default=None,
         help=(
             "Optional output NetCDF path. If omitted, the file is written to "
-            "~/scratch/retraining/assembled/ using the name "
-            "assembled_YYYYMMDD_HHMM.nc."
+            f"{paths.ASSEMBLED_DIR}/ using the name assembled_YYYYMMDD_HHMM.nc."
         ),
     )
     args = parser.parse_args()
