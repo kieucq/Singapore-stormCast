@@ -29,7 +29,7 @@ from utils.io import (
     write_inference_results_zarr,
     save_inference_results_netcdf,
 )
-from utils.nn import build_network_condition_and_target, diffusion_model_forward
+from utils.nn import build_network_condition_and_target, diffusion_model_forward, regression_model_forward
 from utils.plots import inference_plot
 
 
@@ -94,22 +94,24 @@ def main(cfg: DictConfig):
     )
 
     # Load pretrained models
-    if "regression" in cfg.model.diffusion_conditions:
-        regression_model = (
-            Module.from_checkpoint(cfg.inference.regression_checkpoint)
+    use_diffusion = bool(cfg.inference.get("use_diffusion", True))
+
+    regression_model = (
+        Module.from_checkpoint(cfg.inference.regression_checkpoint)
+        .eval()
+        .requires_grad_(False)
+        .to(device)
+    )
+
+    if use_diffusion:
+        diffusion_model = (
+            Module.from_checkpoint(cfg.inference.diffusion_checkpoint)
             .eval()
             .requires_grad_(False)
             .to(device)
         )
     else:
-        regression_model = None
-
-    diffusion_model = (
-        Module.from_checkpoint(cfg.inference.diffusion_checkpoint)
-        .eval()
-        .requires_grad_(False)
-        .to(device)
-    )
+        diffusion_model = None
 
     # initialize zarr
     (
@@ -185,46 +187,64 @@ def main(cfg: DictConfig):
                     device=device,
                 ).unsqueeze(0)
 
-            # Build the diffusion condition and generate the regression forecast.
-            (condition, _, regression_output) = build_network_condition_and_target(
-                background,
-                (state_pred, state_pred),
-                invariant_tensor,
-                lead_time_label=lead_time_label,
-                regression_net=regression_model,
-                condition_list=cfg.model.diffusion_conditions,
-                regression_condition_list=cfg.model.regression_conditions,
-                regression_mask=forecast_mask,
-            )
+            if use_diffusion:
+                # Generate regression forecast and construct diffusion conditioning.
+                condition, _, regression_output = build_network_condition_and_target(
+                    background,
+                    (state_pred, state_pred),
+                    invariant_tensor,
+                    lead_time_label=lead_time_label,
+                    regression_net=regression_model,
+                    condition_list=cfg.model.diffusion_conditions,
+                    regression_condition_list=cfg.model.regression_conditions,
+                    regression_mask=forecast_mask,
+                )
 
-            if regression_output is None:
-                regression_output = torch.zeros_like(state_pred)
+                if regression_output is None:
+                    raise RuntimeError(
+                        "Diffusion inference requires a regression output."
+                    )
 
-            # build_network_condition_and_target() has already applied forecast_mask
-            # to the regression output used for diffusion conditioning.
+                state_pred_noedm = regression_output.masked_fill(
+                    forecast_mask == 0,
+                    0.0,
+                )
 
-            # The future validity mask is unavailable during a real forecast,
-            # so retain the initial input mask throughout the rollout.
-            state_pred_noedm = regression_output.masked_fill(
-                forecast_mask == 0,
-                0.0,
-            )
+                diffusion_correction = diffusion_model_forward(
+                    diffusion_model,
+                    condition,
+                    regression_output.shape,
+                    sampler_args=dict(cfg.sampler.args),
+                    lead_time_label=lead_time_label,
+                )
 
-            diffusion_correction = diffusion_model_forward(
-                diffusion_model,
-                condition,
-                regression_output.shape,
-                sampler_args=dict(cfg.sampler.args),
-                lead_time_label=lead_time_label,
-            )
+                state_pred = regression_output + diffusion_correction.float()
+                state_pred = state_pred.masked_fill(
+                    forecast_mask == 0,
+                    0.0,
+                )
 
-            state_pred = regression_output + diffusion_correction.float()
-            state_pred = state_pred.masked_fill(
-                forecast_mask == 0,
-                0.0,
-            )
+                state_pred_edm = state_pred.clone()
 
-            state_pred_edm = state_pred.clone()
+            else:
+                # Regression-only autoregressive forecast.
+                state_pred = regression_model_forward(
+                    regression_model,
+                    state_pred,
+                    background,
+                    invariant_tensor,
+                    lead_time_label=lead_time_label,
+                    condition_list=cfg.model.regression_conditions,
+                )
+
+                state_pred = state_pred.masked_fill(
+                    forecast_mask == 0,
+                    0.0,
+                )
+
+                # Preserve compatibility with the existing output-writing functions.
+                state_pred_noedm = state_pred.clone()
+                state_pred_edm = state_pred.clone()
 
             denorm_pred_edm = dataset.denormalize_state(
                 state_pred_edm.cpu().numpy()
@@ -367,29 +387,30 @@ def main(cfg: DictConfig):
                 varidx_state = vardict_state[plot_var_state]
 
                 # Regression + diffusion
-                fig = inference_plot(
-                    background_plot,
-                    denorm_pred_edm[varidx_state],
-                    denorm_target[varidx_state],
-                    plot_var_background,
-                    plot_var_state,
-                    initial_time,
-                    forecast_hour,
-                    prediction_mask=prediction_valid[varidx_state],
-                    truth_mask=target_valid[varidx_state],
-                    background_mask=background_mask_plot,
-                    latitude=latitude,
-                    longitude=longitude,
-                )
+                if use_diffusion:
+                    fig = inference_plot(
+                        background_plot,
+                        denorm_pred_edm[varidx_state],
+                        denorm_target[varidx_state],
+                        plot_var_background,
+                        plot_var_state,
+                        initial_time,
+                        forecast_hour,
+                        prediction_mask=prediction_valid[varidx_state],
+                        truth_mask=target_valid[varidx_state],
+                        background_mask=background_mask_plot,
+                        latitude=latitude,
+                        longitude=longitude,
+                    )
 
-                fig.savefig(
-                    f"{cfg.inference.rundir}/"
-                    f"out_{forecast_hour}h_{plot_var_state}"
-                    f"_regression_diffusion.png",
-                    dpi=150,
-                    bbox_inches="tight",
-                )
-                plt.close(fig)
+                    fig.savefig(
+                        f"{cfg.inference.rundir}/"
+                        f"out_{forecast_hour}h_{plot_var_state}"
+                        f"_regression_diffusion.png",
+                        dpi=150,
+                        bbox_inches="tight",
+                    )
+                    plt.close(fig)
 
                 # Regression only
                 fig = inference_plot(
