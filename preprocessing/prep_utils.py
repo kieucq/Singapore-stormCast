@@ -1,10 +1,10 @@
 """
-Utilities for the first SINGV -> StormCast retraining preprocessing stage.
+Utilities for the first SINGV -> StormCast preprocessing preprocessing stage.
 
 This module converts one assembled SINGV state from the native 960 x 960
 latitude/longitude grid into a cropped and regridded 624 x 624 state.
 
-This retraining pipeline keeps the native
+This preprocessing pipeline keeps the native
 SINGV pressure levels and does not construct HRRR hybrid levels.
 """
 
@@ -17,7 +17,7 @@ import xarray as xr
 from scipy.interpolate import RegularGridInterpolator
 
 
-# ── Fixed retraining specification ────────────────────────────────────────────
+# ── Fixed preprocessing specification ────────────────────────────────────────────
 
 SURFACE_VARIABLES = ["tas", "uas", "vas", "psl", "pr"]
 PRESSURE_VARIABLES = ["ta", "ua", "va", "hus", "zg"]
