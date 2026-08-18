@@ -86,12 +86,12 @@ are:
                  ▼                                    ▼
         SINGV preprocessing                    ERA5 preprocessing
                  │                                    │
-        assemble_state.py                  background/download_era5.py
+        assemble_state.py                     download_era5.py
                  │                                    │
                  ▼                                    ▼
         assembled/assembled_*.nc              background/raw/*.nc
                  │                                    │
-        prepare_state.py                    background/prepare_era5.py
+        prepare_state.py                      prepare_era5.py
         + prep_utils.py                                │
                  │                                    ▼
                  ▼                         background/prepared/background_*.nc
@@ -291,7 +291,7 @@ For each input time `t`, the pipeline prepares an ERA5 background at the same
 valid time and interpolates it onto exactly the same `624 × 624` grid as the
 prepared SINGV state.
 
-### `background/download_era5.py`
+### `download_era5.py`
 
 Downloads the monthly ERA5 files required for background conditioning when
 they are not already available locally.
@@ -325,7 +325,7 @@ Normal dataset construction calls the downloader automatically through
 
 ---
 
-### `background/prepare_era5.py`
+### `prepare_era5.py`
 
 Converts the raw ERA5 data at one valid time into the background field used by
 StormCast.
