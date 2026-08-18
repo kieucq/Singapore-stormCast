@@ -22,8 +22,11 @@ python build_pair.py \
 
 Default outputs
 ---------------
-~/scratch/retraining/assembled/assembled_YYYYMMDD_HHMM.nc
-~/scratch/retraining/prepared/prepared_YYYYMMDD_HHMM.nc
+Outputs are written beneath the data root configured in paths.py:
+
+assembled/assembled_YYYYMMDD_HHMM.nc
+prepared/prepared_YYYYMMDD_HHMM.nc
+background/prepared/background_YYYYMMDD_HHMM.nc
 """
 
 from __future__ import annotations
@@ -40,12 +43,12 @@ import xarray as xr
 
 import assemble_state as assembler
 import prepare_state as preparer
+import paths
 
 from background import download_era5 as era5_downloader
 from background import prepare_era5 as era5_preparer
 
 
-RETRAINING_DIR = Path("~/scratch/retraining").expanduser()
 PAIR_INTERVAL = timedelta(hours=6)
 
 
@@ -113,7 +116,7 @@ def ensure_prepared(
     assembled_path = assembled_path.expanduser()
     output_path = preparer.make_output_path(
         assembled_path,
-        preparer.DEFAULT_OUTPUT_DIR,
+        paths.PREPARED_DIR,
     )
 
     if output_path.exists() and not overwrite:
@@ -139,7 +142,7 @@ def ensure_background(
     """Create or reuse the prepared ERA5 background at the input time."""
     output_path = era5_preparer.make_output_path(
         input_time,
-        era5_preparer.DEFAULT_OUTPUT_DIR,
+        paths.BACKGROUND_PREPARED_DIR,
     )
 
     if output_path.exists() and not overwrite:
@@ -151,6 +154,8 @@ def ensure_background(
     return era5_preparer.prepare_era5(
         input_time,
         output_path=output_path,
+        raw_root=paths.BACKGROUND_RAW_DIR,
+        singv_prepared_dir=paths.PREPARED_DIR,
         overwrite=overwrite,
         verbose=not quiet,
     )
@@ -337,9 +342,9 @@ def validate_training_sample(pair: TrainingPair) -> None:
 
 
 def _manifest_path_value(path: Path) -> str:
-    """Store paths relative to the retraining root when possible."""
+    """Store paths relative to the data root when possible."""
     resolved_path = path.resolve()
-    resolved_root = RETRAINING_DIR.resolve()
+    resolved_root = paths.DATA_ROOT.resolve()
 
     try:
         return str(resolved_path.relative_to(resolved_root))
@@ -431,7 +436,7 @@ def build_pair(
         input_time,
         overwrite=overwrite_assembled,
     )
-    era5_downloader.ensure_era5_month(input_time)
+    era5_downloader.ensure_era5_month(input_time, output_root=paths.BACKGROUND_RAW_DIR)
     assembled_target = ensure_assembled(
         target_time,
         overwrite=overwrite_assembled,
