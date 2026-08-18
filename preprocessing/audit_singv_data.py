@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Audit the SINGV-RCM archive used for StormCast retraining.
+Audit the SINGV-RCM archive used for StormCast preprocessing.
 
 The default audit checks every expected daily file from 1995-01-01 through
 2014-12-31 without loading the full weather fields. It verifies:
@@ -11,7 +11,7 @@ The default audit checks every expected daily file from 1995-01-01 through
 - the expected variable, dimensions, sizes, and coordinates are present;
 - decoded timestamps match the date and cadence encoded in the filename;
 - latitude and longitude are finite, strictly increasing, and unchanged;
-- pressure levels match the fixed 14-level retraining specification;
+- pressure levels match the fixed 14-level preprocessing specification;
 - variable dtype is numeric;
 - dtype, units, packing, missing-value, and time metadata remain consistent.
 
@@ -23,18 +23,20 @@ long job is interrupted.
 
 Default outputs
 ---------------
-~/scratch/retraining/audit/audit_issues.csv
-~/scratch/retraining/audit/audit_summary.csv
+Reports are written to the audit directory configured in paths.py:
+
+audit_issues.csv
+audit_summary.csv
 
 Examples
 --------
-python audit.py
+python audit_singv_data.py
 
-python audit.py \
+python audit_singv_data.py \
     --start-date 2014-01-01 \
     --end-date 2014-01-31
 
-python audit.py --scan-data
+python audit_singv_data.py --scan-data
 """
 
 from __future__ import annotations
@@ -51,15 +53,12 @@ from typing import Any, Iterable
 import numpy as np
 import xarray as xr
 
+import paths
+
 
 # ── Archive specification ────────────────────────────────────────────────────
 
-BASE_DIR = Path(
-    "/home/project/13004327/data_service/model_data/V3_Historical/"
-    "V3-WMC-2/CCRS/ERA5/historical/reanalysis/SINGV-RCM/vn5"
-)
 
-DEFAULT_OUTPUT_DIR = Path("~/scratch/retraining/audit").expanduser()
 DEFAULT_START_DATE = date(1995, 1, 1)
 DEFAULT_END_DATE = date(2014, 12, 31)
 
@@ -278,7 +277,7 @@ def discover_files(
 
     for year, month in iter_months(start, end):
         month_name = f"{year:04d}{month:02d}"
-        directory = BASE_DIR / spec.frequency / spec.variable / month_name
+        directory = paths.SINGV_ARCHIVE_ROOT / spec.frequency / spec.variable / month_name
 
         if not directory.is_dir():
             add_issue(
@@ -1050,8 +1049,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=DEFAULT_OUTPUT_DIR,
-        help=f"Report directory (default: {DEFAULT_OUTPUT_DIR}).",
+        default=paths.AUDIT_DIR,
+        help=f"Report directory (default: {paths.AUDIT_DIR}).",
     )
     parser.add_argument(
         "--scan-data",
@@ -1086,9 +1085,9 @@ def main() -> None:
             "--progress-every must be non-negative."
         )
 
-    if not BASE_DIR.is_dir():
+    if not paths.SINGV_ARCHIVE_ROOT.is_dir():
         raise FileNotFoundError(
-            f"SINGV base directory not found: {BASE_DIR}"
+            f"SINGV base directory not found: {paths.SINGV_ARCHIVE_ROOT}"
         )
 
     output_dir = args.output_dir.expanduser()
@@ -1104,7 +1103,7 @@ def main() -> None:
 
     print("SINGV-RCM ARCHIVE AUDIT")
     print("=======================")
-    print(f"Base directory: {BASE_DIR}")
+    print(f"Base directory: {paths.SINGV_ARCHIVE_ROOT}")
     print(
         f"Date range:     {args.start_date} "
         f"through {args.end_date}"
