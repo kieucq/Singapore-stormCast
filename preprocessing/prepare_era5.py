@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Prepare one monthly-downloaded ERA5 background state for StormCast retraining.
+Prepare one ERA5 background state from monthly downloaded data for StormCast preprocessing.
 
 This preparation stage:
 
@@ -9,7 +9,7 @@ This preparation stage:
 3. converts ERA5 geopotential ``z`` to geopotential height in metres;
 4. interpolates all ERA5 fields onto the exact prepared SINGV target grid;
 5. stacks the fixed 26-channel background tensor;
-6. saves an unnormalized NetCDF file.
+6. saves an unnormalised NetCDF file.
 
 The prepared SINGV file at the same valid time is treated as the authoritative
 source of the target 624 x 624 latitude/longitude grid and corresponding
@@ -26,7 +26,10 @@ python prepare_era5.py \
 
 Default output
 --------------
-~/scratch/retraining/background/prepared/background_19950101_0100.nc
+Prepared backgrounds are written beneath BACKGROUND_PREPARED_DIR configured
+in paths.py, with names such as:
+
+    background_19950101_0100.nc
 """
 
 from __future__ import annotations
@@ -39,11 +42,8 @@ from time import perf_counter
 import numpy as np
 import xarray as xr
 
+import paths
 
-RETRAINING_DIR = Path("~/scratch/retraining").expanduser()
-DEFAULT_RAW_ROOT = RETRAINING_DIR / "background" / "raw"
-DEFAULT_OUTPUT_DIR = RETRAINING_DIR / "background" / "prepared"
-DEFAULT_SINGV_PREPARED_DIR = RETRAINING_DIR / "prepared"
 
 VALID_UTC_HOURS = (1, 7, 13, 19)
 STANDARD_GRAVITY = 9.80665
@@ -110,7 +110,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Interpolate one raw ERA5 monthly background state onto the exact "
-            "prepared SINGV grid and save a 26-channel unnormalized NetCDF file."
+            "prepared SINGV grid and save a 26-channel unnormalised NetCDF file."
         )
     )
     parser.add_argument(
@@ -123,23 +123,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--raw-root",
         type=Path,
-        default=DEFAULT_RAW_ROOT,
-        help=f"Root directory containing raw monthly ERA5 files (default: {DEFAULT_RAW_ROOT})",
-    )
+        default=paths.BACKGROUND_RAW_DIR,
+        help=(
+            "Root directory containing raw monthly ERA5 files "
+            f"(default: {paths.BACKGROUND_RAW_DIR})"
+        ),
+    )   
     parser.add_argument(
         "--singv-prepared-dir",
         type=Path,
-        default=DEFAULT_SINGV_PREPARED_DIR,
+        default=paths.PREPARED_DIR,
         help=(
             "Directory containing prepared SINGV states used as the authoritative "
-            f"target grid (default: {DEFAULT_SINGV_PREPARED_DIR})"
+            f"target grid (default: {paths.PREPARED_DIR})"
         ),
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=DEFAULT_OUTPUT_DIR,
-        help=f"Output directory (default: {DEFAULT_OUTPUT_DIR})",
+        default=paths.BACKGROUND_PREPARED_DIR,
+        help=f"Output directory (default: {paths.BACKGROUND_PREPARED_DIR})",
     )
     parser.add_argument(
         "--output",
@@ -490,7 +493,7 @@ def build_output_dataset(
         attrs={
             "source": "ERA5 hourly reanalysis",
             "processing_stage": "prepared_background",
-            "normalization": "none",
+            "normalisation": "none",
             "grid_source": "prepared SINGV state",
             "interpolation": "xarray.interp linear",
             "pressure_levels_hpa": ", ".join(str(level) for level in PRESSURE_LEVELS_HPA),
@@ -588,8 +591,8 @@ def prepare_era5(
     valid_time: datetime,
     output_path: Path | None = None,
     *,
-    raw_root: Path = DEFAULT_RAW_ROOT,
-    singv_prepared_dir: Path = DEFAULT_SINGV_PREPARED_DIR,
+    raw_root: Path = paths.BACKGROUND_RAW_DIR,
+    singv_prepared_dir: Path = paths.PREPARED_DIR,
     overwrite: bool = False,
     verbose: bool = True,
 ) -> Path:
@@ -601,8 +604,8 @@ def prepare_era5(
     valid_time
         UTC valid time. Hour must be 01, 07, 13, or 19.
     output_path
-        Explicit prepared output path. When omitted, the default prepared
-        directory and filename are used.
+        Explicit prepared output path. When omitted, BACKGROUND_PREPARED_DIR
+        configured in paths.py is used.
     raw_root
         Root directory containing raw monthly ERA5 files.
     singv_prepared_dir
@@ -626,7 +629,7 @@ def prepare_era5(
         )
 
     if output_path is None:
-        output_path = make_output_path(valid_time, DEFAULT_OUTPUT_DIR)
+        output_path = make_output_path(valid_time, paths.BACKGROUND_PREPARED_DIR)
     else:
         output_path = output_path.expanduser()
 
