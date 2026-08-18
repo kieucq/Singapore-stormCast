@@ -61,10 +61,9 @@ from pathlib import Path
 from typing import Iterable
 
 import build_pair as pair_builder
+import paths
 
 
-RETRAINING_DIR = Path("~/scratch/retraining").expanduser()
-DEFAULT_MANIFEST_DIR = RETRAINING_DIR / "manifests"
 PAIR_INTERVAL = timedelta(hours=6)
 
 FIRST_VALID_TIME = time(hour=1)
@@ -184,9 +183,9 @@ def unavailable_pair_reason(
 
 
 def manifest_path_value(path: Path) -> str:
-    """Store paths relative to the retraining root whenever possible."""
+    """Store paths relative to the data root whenever possible."""
     resolved_path = path.expanduser().resolve()
-    resolved_root = RETRAINING_DIR.resolve()
+    resolved_root = paths.DATA_ROOT.resolve()
 
     try:
         return str(resolved_path.relative_to(resolved_root))
@@ -201,7 +200,7 @@ def resolve_manifest_file(value: str) -> Path:
     if path.is_absolute():
         return path
 
-    return RETRAINING_DIR / path
+    return paths.DATA_ROOT / path
 
 
 def load_pair_manifest(
@@ -478,10 +477,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--manifest-dir",
         type=Path,
-        default=DEFAULT_MANIFEST_DIR,
+        default=paths.MANIFEST_DIR,
         help=(
             "Directory for dataset manifests "
-            f"(default: {DEFAULT_MANIFEST_DIR})."
+            f"(default: {paths.MANIFEST_DIR})."
         ),
     )
     parser.add_argument(
