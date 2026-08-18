@@ -1,5 +1,5 @@
 """
-SINGV and ERA5 dataset adapter for StormCast training.
+SINGV and ERA5 dataset adapter for StormCast.
 
 The adapter reads SINGV input-target pairs and corresponding ERA5
 backgrounds from a CSV manifest. It applies separate training-set
@@ -12,7 +12,7 @@ Dataset parameters
 ------------------
 data_root
     Dataset root used to resolve relative paths stored inside the manifests.
-    Defaults to ``~/scratch/retraining``.
+    This parameter is required.
 
 train_manifest
     Pair manifest used when ``train=True``.
@@ -44,7 +44,6 @@ from .dataset import StormCastDataset
 EXPECTED_COLUMNS = ("input_time", "input_file", "background_time", "background_file", "target_time", "target_file")
 EXPECTED_STATE_DIMS = ("time", "channel", "y", "x")
 EXPECTED_BACKGROUND_DIMS = ("time", "channel", "y", "x")
-DEFAULT_DATA_ROOT = "~/scratch/retraining"
 
 
 @dataclass(frozen=True)
@@ -186,7 +185,7 @@ def _read_manifest(path: Path, data_root: Path) -> tuple[PairRecord, ...]:
     return tuple(records)
 
 
-class RegressionDatasetAdapter(StormCastDataset):
+class SINGVDatasetAdapter(StormCastDataset):
     """Load normalized SINGV input-target pairs for StormCast."""
 
     lead_time_steps = 0
@@ -194,7 +193,12 @@ class RegressionDatasetAdapter(StormCastDataset):
     def __init__(self, params: Any, train: bool) -> None:
         """Initialize either the training or validation split."""
 
-        data_root = _resolve_path(getattr(params, "data_root", DEFAULT_DATA_ROOT))
+        try:
+            data_root = _resolve_path(params.data_root)
+        except AttributeError as error:
+            raise ValueError(
+                "Missing required dataset parameter: data_root"
+            ) from error
         manifest_name = "train_manifest" if train else "validation_manifest"
 
         try:
