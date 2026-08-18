@@ -22,12 +22,13 @@ python prepare_state.py PATH_TO_ASSEMBLED_FILE
 
 Example
 -------
-python prepare_state.py \
-    ~/scratch/retraining/assembled/assembled_20141201_0100.nc
+python prepare_state.py assembled_20141201_0100.nc
 
 Default output
 --------------
-~/scratch/retraining/prepared/prepared_20141201_0100.nc
+The prepared output directory configured in paths.py, with filename:
+
+prepared_YYYYMMDD_HHMM.nc
 """
 
 from __future__ import annotations
@@ -40,10 +41,7 @@ import numpy as np
 import xarray as xr
 
 import prep_utils as prep
-
-
-RETRAINING_DIR = Path("~/scratch/retraining").expanduser()
-DEFAULT_OUTPUT_DIR = RETRAINING_DIR / "prepared"
+import paths
 
 
 def parse_args() -> argparse.Namespace:
@@ -61,8 +59,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=DEFAULT_OUTPUT_DIR,
-        help=f"Output directory (default: {DEFAULT_OUTPUT_DIR})",
+        default=paths.PREPARED_DIR,
+        help=f"Output directory (default: {paths.PREPARED_DIR})",
     )
     parser.add_argument(
         "--valid-fraction-threshold",
@@ -238,7 +236,7 @@ def prepare_state(
     if output_path is None:
         output_path = make_output_path(
             input_path,
-            DEFAULT_OUTPUT_DIR,
+            paths.PREPARED_DIR,
         )
     else:
         output_path = output_path.expanduser()
