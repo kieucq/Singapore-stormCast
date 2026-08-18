@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Download monthly ERA5 background data for SINGV StormCast retraining.
+Download monthly ERA5 background data for SINGV StormCast preprocessing.
 
 The downloader follows the ERA5 conditioning specification used in the
 original StormCast paper:
@@ -70,8 +70,9 @@ Download only one product type:
 
 Default outputs
 ---------------
+Raw files are written beneath BACKGROUND_RAW_DIR configured in paths.py:
 
-    ~/scratch/retraining/background/raw/YYYY/
+    YYYY/
         era5_pressure_YYYYMM.nc
         era5_single_YYYYMM.nc
 
@@ -97,6 +98,8 @@ from typing import Any, Iterable, Sequence
 
 import numpy as np
 import xarray as xr
+
+import paths
 
 
 # ── Fixed StormCast ERA5 specification ───────────────────────────────────────
@@ -127,7 +130,6 @@ VALID_TIMES_UTC = ("01:00", "07:00", "13:00", "19:00")
 # CDS area ordering is north, west, south, east.
 DEFAULT_AREA = (10.25, 92.75, -7.50, 110.75)
 
-DEFAULT_OUTPUT_DIR = Path("~/scratch/retraining/background/raw")
 PRODUCTS = ("pressure", "single")
 EARLIEST_ERA5_DATE = date(1940, 1, 1)
 
@@ -210,7 +212,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Download monthly ERA5 pressure-level and single-level background "
-            "data for SINGV StormCast retraining."
+            "data for SINGV StormCast preprocessing."
         )
     )
     parser.add_argument(
@@ -234,10 +236,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=DEFAULT_OUTPUT_DIR,
+        default=paths.BACKGROUND_RAW_DIR,
         help=(
             "Root directory for monthly raw files. Files are written below a "
-            f"YYYY subdirectory. Default: {DEFAULT_OUTPUT_DIR}"
+            f"YYYY subdirectory. Default: {paths.BACKGROUND_RAW_DIR}"
         ),
     )
     parser.add_argument(
@@ -607,7 +609,7 @@ def download_one(
 def ensure_era5_month(
     valid_time: datetime,
     *,
-    output_root: Path = DEFAULT_OUTPUT_DIR,
+    output_root: Path = paths.BACKGROUND_RAW_DIR,
     area: Sequence[float] = DEFAULT_AREA,
 ) -> tuple[Path, Path]:
     """
