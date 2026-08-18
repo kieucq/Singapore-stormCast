@@ -30,10 +30,9 @@ Build a training range:
         --start-date 1995-01-01 \
         --end-date 1995-01-31
 
-This produces:
+This produces a manifest beneath MANIFEST_DIR configured in paths.py:
 
-    ~/scratch/retraining/manifests/
-        training_19950101_19950131.csv
+    training_19950101_19950131.csv
 
 Add ``--dry-run`` to preview the work without building states or modifying
 manifest files.

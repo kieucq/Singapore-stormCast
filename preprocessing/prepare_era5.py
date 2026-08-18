@@ -9,7 +9,7 @@ This preparation stage:
 3. converts ERA5 geopotential ``z`` to geopotential height in metres;
 4. interpolates all ERA5 fields onto the exact prepared SINGV target grid;
 5. stacks the fixed 26-channel background tensor;
-6. saves an unnormalised NetCDF file.
+6. saves an unnormalized NetCDF file.
 
 The prepared SINGV file at the same valid time is treated as the authoritative
 source of the target 624 x 624 latitude/longitude grid and corresponding
@@ -110,7 +110,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Interpolate one raw ERA5 monthly background state onto the exact "
-            "prepared SINGV grid and save a 26-channel unnormalised NetCDF file."
+            "prepared SINGV grid and save a 26-channel unnormalized NetCDF file."
         )
     )
     parser.add_argument(
@@ -493,7 +493,7 @@ def build_output_dataset(
         attrs={
             "source": "ERA5 hourly reanalysis",
             "processing_stage": "prepared_background",
-            "normalisation": "none",
+            "normalization": "none",
             "grid_source": "prepared SINGV state",
             "interpolation": "xarray.interp linear",
             "pressure_levels_hpa": ", ".join(str(level) for level in PRESSURE_LEVELS_HPA),
