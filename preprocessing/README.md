@@ -1,160 +1,418 @@
-# SINGV → StormCast retraining
+# SINGV → StormCast preprocessing
 
-This folder contains the data-preparation and training-integration pipeline for
-adapting StormCast to six-hour SINGV-RCM states.
+This folder contains the preprocessing pipeline used to adapt StormCast to
+six-hour SINGV-RCM states with ERA5 synoptic background conditioning.
 
-The pipeline converts archived SINGV files into 75-channel `624 × 624` state
-files, groups them into six-hour input-target pairs, computes training-set
-normalisation statistics, and exposes the resulting dataset to the official
-StormCast trainer.
+The pipeline:
+
+- extracts SINGV states from the archived SINGV-RCM dataset;
+- crops and regrids them to a `624 × 624` grid;
+- prepares matching ERA5 background fields;
+- groups the data into six-hour input-background-target samples;
+- computes training-set normalisation statistics;
+- provides the resulting files and manifests to the StormCast training code.
+
+Each prepared SINGV state contains 75 channels:
+
+- 5 surface variables:
+  - `tas` — near-surface air temperature;
+  - `uas` — eastward near-surface wind;
+  - `vas` — northward near-surface wind;
+  - `psl` — mean sea-level pressure;
+  - `pr` — precipitation rate;
+- 5 pressure-level variables:
+  - `ta` — air temperature;
+  - `ua` — eastward wind;
+  - `va` — northward wind;
+  - `hus` — specific humidity;
+  - `zg` — geopotential height;
+- each pressure-level variable is represented at 14 levels:
+  `1000`, `925`, `850`, `800`, `750`, `700`, `600`, `500`, `400`, `300`,
+  `200`, `100`, `50`, and `10` hPa.
+
+These variables were selected to mirror the meteorological content of the
+original StormCast state configuration as closely as possible using the
+variables and pressure levels available in the SINGV-RCM archive.
+
+Each prepared ERA5 background contains 26 channels:
+
+- `u`, `v`, `z`, `t`, and `q` at 1000, 850, 500, and 250 hPa,
+  where `z` is converted from geopotential to geopotential height;
+- `u10`, `v10`, `t2m`, `tcwv`, `mslp`, and `sp`.
+
+Each training sample therefore represents:
+
+```text
+SINGV(t) + ERA5(t) → SINGV(t + 6 h)
+```
 
 ## Pipeline overview
 
+For normal use, preprocessing requires only two main commands:
+
 ```text
-SINGV-RCM archive
-        │
-        ├── audit_singv_data.py
-        │       Check archive coverage, structure, metadata, and optionally data
-        │
-        ▼
-assemble_state.py
-        │       Extract one native-grid state at 01/07/13/19 UTC
-        ▼
-assembled/assembled_YYYYMMDD_HHMM.nc
-        │
-        ▼
-prepare_state.py + prep_utils.py
-        │       Crop, regrid, mask, and stack 75 channels
-        ▼
-prepared/prepared_YYYYMMDD_HHMM.nc
-        │
-        ▼
-build_pair.py
-        │       Create and validate one t → t+6 h pair
-        ▼
 build_dataset.py
-        │       Build all pairs in a training/validation/testing date range
-        ▼
-manifests/<split>_<start>_<end>_pairs.csv
         │
-        ├── compute_normalisation_stats.py
-        │       Compute per-channel statistics from the training manifest only
+        │  Automatically:
+        │
+        ├── assembles the required SINGV states
+        ├── prepares the SINGV states
+        ├── downloads the required ERA5 data
+        ├── prepares matching ERA5 backgrounds
+        ├── validates six-hour training samples
+        └── writes the dataset manifest
         │
         ▼
-normalisation_stats/<training-range>_normalisation.npz
+manifests/<split>_<start>_<end>.csv
         │
         ▼
-singv.py
-        │       StormCast dataset adapter
-        ▼
-training_smoke_test.sh
-                End-to-end two-step StormCast regression test
+compute_normalisation_stats.py
+        │
+        ├── SINGV state normalisation statistics
+        └── ERA5 background normalisation statistics
 ```
 
+The individual preprocessing stages called internally by `build_dataset.py`
+are:
+
+```text
+                            build_dataset.py
+                                   │
+                                   ▼
+                              build_pair.py
+                                   │
+                 ┌─────────────────┴──────────────────┐
+                 │                                    │
+                 ▼                                    ▼
+        SINGV preprocessing                    ERA5 preprocessing
+                 │                                    │
+        assemble_state.py                  background/download_era5.py
+                 │                                    │
+                 ▼                                    ▼
+        assembled/assembled_*.nc              background/raw/*.nc
+                 │                                    │
+        prepare_state.py                    background/prepare_era5.py
+        + prep_utils.py                                │
+                 │                                    ▼
+                 ▼                         background/prepared/background_*.nc
+        prepared/prepared_*.nc                        │
+                 │                                    │
+                 └─────────────────┬──────────────────┘
+                                   │
+                                   ▼
+                     SINGV(t) + ERA5(t) → SINGV(t+6h)
+                                   │
+                                   ▼
+                  manifests/<split>_<start>_<end>.csv
+```
+
+`audit_singv_data.py` is an optional preliminary check of the source archive.
+It is useful when validating a new date range or archive installation, but it
+is not required for each dataset build.
+
+---
+
 ## File reference
+
+### `paths.py`
+
+Defines the filesystem locations shared by the preprocessing pipeline.
+
+The main paths are:
+
+```text
+DATA_ROOT
+ASSEMBLED_DIR
+PREPARED_DIR
+MANIFEST_DIR
+NORMALISATION_DIR
+AUDIT_DIR
+BACKGROUND_RAW_DIR
+BACKGROUND_PREPARED_DIR
+SINGV_ARCHIVE_ROOT
+```
+
+Edit `DATA_ROOT` and `SINGV_ARCHIVE_ROOT` when moving the pipeline to another
+system. The remaining paths are derived automatically.
+
+---
 
 ### `audit_singv_data.py`
 
 Audits the original SINGV-RCM archive before dataset generation.
 
-It checks expected files over a date range, verifies that they can be opened,
-and checks variables, dimensions, times, coordinates, pressure levels, units,
-dtype, and related metadata. The optional `--scan-data` mode also reads the
-weather fields and inspects their numerical values, but is much slower.
+The default audit checks every expected daily file from 1995 through 2014 and
+verifies:
 
-Typical use:
+- archive coverage;
+- filename structure;
+- variables and dimensions;
+- timestamps;
+- latitude and longitude coordinates;
+- pressure levels;
+- dtype and units;
+- packing and missing-value metadata.
+
+The optional `--scan-data` mode additionally reads the full weather fields and
+checks their numerical contents, but is substantially slower.
+
+Example:
 
 ```bash
-python audit_singv_data.py   --start-date 1995-01-01   --end-date 1995-01-31
+python preprocessing/audit_singv_data.py \
+    --start-date 1995-01-01 \
+    --end-date 1995-01-31
 ```
 
-Reports are written under:
+Reports are written to `AUDIT_DIR` configured in `paths.py`:
 
 ```text
-~/scratch/retraining/audit/
+audit_issues.csv
+audit_summary.csv
 ```
+
+---
 
 ### `assemble_state.py`
 
 Builds one native-grid SINGV state for a requested valid time.
 
-It finds the five surface files and five pressure-level files required for that
-time, extracts the correct timestep, combines the variables, and writes one
-NetCDF file on the original `960 × 960` grid.
+It locates the five required surface files and five required pressure-level
+files, extracts the appropriate timestep, and combines them into one NetCDF
+file on the original `960 × 960` SINGV grid.
 
-Supported times are `01`, `07`, `13`, and `19` UTC.
-
-```bash
-python assemble_state.py --datetime 2014-12-01T01:00
-```
-
-Default output:
+The surface variables are:
 
 ```text
-~/scratch/retraining/assembled/assembled_20141201_0100.nc
+tas
+uas
+vas
+psl
+pr
 ```
+
+The pressure-level variables are:
+
+```text
+ta
+ua
+va
+hus
+zg
+```
+
+Supported valid times are:
+
+```text
+01 UTC
+07 UTC
+13 UTC
+19 UTC
+```
+
+Example:
+
+```bash
+python preprocessing/assemble_state.py \
+    --datetime 2014-12-01T01:00
+```
+
+The default output is written to `ASSEMBLED_DIR`:
+
+```text
+assembled_20141201_0100.nc
+```
+
+---
 
 ### `prep_utils.py`
 
-Contains constants and helper functions used by `prepare_state.py`.
+Contains the numerical constants and preprocessing functions used by
+`prepare_state.py`.
 
 This includes:
 
 - the five surface variables;
 - the five pressure-level variables;
-- the 14 pressure levels;
+- the 14 SINGV pressure levels;
 - the permanent 75-channel ordering;
 - source, cropped, and target grid definitions;
-- crop and regridding helpers;
-- pressure-validity masking logic.
+- bilinear regridding;
+- conservative regridding;
+- mask-aware pressure-field regridding;
+- pressure-validity masking.
 
 This is a helper module and is not normally run directly.
 
+---
+
 ### `prepare_state.py`
 
-Converts one assembled native-grid state into the format used for retraining.
+Converts one assembled SINGV state into the format used by StormCast training.
 
 It:
 
 1. validates the assembled `960 × 960` state;
 2. crops 12 pixels from every edge;
-3. regrids `936 × 936` to `624 × 624`;
-4. keeps the 14 native SINGV pressure levels;
-5. stacks five surface channels and 70 pressure-level channels;
-6. stores invalid pressure-level cells as `NaN`;
-7. writes an unnormalised NetCDF file.
+3. reduces the grid from `936 × 936` to `624 × 624`;
+4. preserves the 14 native SINGV pressure levels;
+5. stacks 5 surface channels and 70 pressure-level channels;
+6. constructs pressure-level validity masks;
+7. stores invalid pressure-level cells as `NaN`;
+8. writes an unnormalised NetCDF state.
+
+Example:
 
 ```bash
-python prepare_state.py   ~/scratch/retraining/assembled/assembled_20141201_0100.nc
+python preprocessing/prepare_state.py \
+    ~/scratch/stormcast-data/assembled/assembled_20141201_0100.nc
 ```
 
-Default output:
+The default output is written to `PREPARED_DIR`:
 
 ```text
-~/scratch/retraining/prepared/prepared_20141201_0100.nc
+prepared_20141201_0100.nc
 ```
+
+The output state has shape:
+
+```text
+(time=1, channel=75, y=624, x=624)
+```
+
+---
+
+## ERA5 background preparation
+
+StormCast training uses a lower-resolution synoptic background in addition to
+the high-resolution SINGV state.
+
+For each input time `t`, the pipeline prepares an ERA5 background at the same
+valid time and interpolates it onto exactly the same `624 × 624` grid as the
+prepared SINGV state.
+
+### `background/download_era5.py`
+
+Downloads the monthly ERA5 files required for background conditioning when
+they are not already available locally.
+
+Raw ERA5 data are stored beneath:
+
+```text
+BACKGROUND_RAW_DIR
+```
+
+The required background channels are constructed from:
+
+```text
+Pressure levels:
+u, v, z, t, q
+at 1000, 850, 500, and 250 hPa
+
+Single levels:
+u10
+v10
+t2m
+tcwv
+mslp
+sp
+```
+
+This gives 26 background channels in total.
+
+Normal dataset construction calls the downloader automatically through
+`build_pair.py` when required.
+
+---
+
+### `background/prepare_era5.py`
+
+Converts the raw ERA5 data at one valid time into the background field used by
+StormCast.
+
+It:
+
+- extracts the requested ERA5 timestep;
+- selects the required pressure and single-level fields;
+- converts geopotential to geopotential height where required;
+- interpolates ERA5 onto the exact prepared SINGV grid;
+- stacks the fixed 26-channel background;
+- validates that the result is finite;
+- writes an unnormalised NetCDF file.
+
+Prepared backgrounds are written beneath:
+
+```text
+BACKGROUND_PREPARED_DIR
+```
+
+with names such as:
+
+```text
+background_20141201_0100.nc
+```
+
+The output has shape:
+
+```text
+(time=1, channel=26, y=624, x=624)
+```
+
+---
 
 ### `build_pair.py`
 
-Builds one six-hour input-target pair.
+Builds and validates one complete six-hour training sample.
 
-For an input time `t`, it assembles and prepares the states at `t` and
-`t + 6 hours`, reuses existing files where possible, validates that both
-prepared states are structurally compatible, and can record the pair in a CSV
-manifest.
+For an input time `t`, it ensures that the following exist:
 
-```bash
-python build_pair.py --datetime 2014-12-01T01:00
+```text
+prepared SINGV state at t
+prepared ERA5 background at t
+prepared SINGV state at t + 6 h
 ```
 
-This is useful for debugging one pair. For a full date range, use
-`build_dataset.py` instead.
+It therefore constructs:
+
+```text
+SINGV(t) + ERA5(t) → SINGV(t + 6 h)
+```
+
+The script reuses existing intermediate files where possible and validates:
+
+- valid times;
+- the six-hour input-target separation;
+- state dimensions and shapes;
+- ERA5 channel ordering;
+- ERA5 finite values;
+- matching SINGV and ERA5 grids.
+
+Example:
+
+```bash
+python preprocessing/build_pair.py \
+    --datetime 2014-12-01T01:00
+```
+
+Useful options include:
+
+```text
+--overwrite-assembled
+--overwrite-prepared
+--manifest
+--quiet
+```
+
+`build_pair.py` is primarily useful for testing or debugging individual
+samples. Use `build_dataset.py` for complete date ranges.
+
+---
 
 ### `build_dataset.py`
 
-Builds every usable six-hour pair in an explicit date range.
+Builds every usable six-hour sample within an explicit date range.
 
-The user chooses one of three split labels:
+The user supplies one of three split labels:
 
 ```text
 training
@@ -162,242 +420,339 @@ validation
 testing
 ```
 
-The manifest name is generated automatically from the split and dates:
+The manifest name is generated automatically:
 
 ```text
-<split>_<start-YYYYMMDD>_<end-YYYYMMDD>_pairs.csv
+<split>_<start-YYYYMMDD>_<end-YYYYMMDD>.csv
 ```
 
-Preview a build:
+For example:
+
+```text
+training_19950101_19950131.csv
+```
+
+Preview a dataset build:
 
 ```bash
-python build_dataset.py   --split training   --start-date 1995-01-01   --end-date 1995-01-31   --dry-run
+python preprocessing/build_dataset.py \
+    --split training \
+    --start-date 1995-01-01 \
+    --end-date 1995-01-31 \
+    --dry-run
 ```
 
 Run the build:
 
 ```bash
-python build_dataset.py   --split training   --start-date 1995-01-01   --end-date 1995-01-31
+python preprocessing/build_dataset.py \
+    --split training \
+    --start-date 1995-01-01 \
+    --end-date 1995-01-31
 ```
 
 The script:
 
-- keeps pairs fully inside the requested date range;
-- skips known missing-data dates;
-- records unexpected missing files and stops;
-- reuses completed pairs when rerun;
-- writes separate successful-pair and skipped-pair manifests.
+- considers every six-hour pair within the requested range;
+- prevents pairs from crossing the requested split boundary;
+- skips known missing SINGV dates;
+- stops on unexpected missing files;
+- reuses completed samples when rerun;
+- optionally revalidates existing samples;
+- writes one six-column CSV manifest.
 
-Default outputs:
+The manifest columns are:
 
 ```text
-~/scratch/retraining/manifests/
-├── training_19950101_19950131_pairs.csv
-└── training_19950101_19950131_skipped.csv
+input_time
+input_file
+background_time
+background_file
+target_time
+target_file
 ```
+
+Generated file paths are stored relative to `DATA_ROOT` whenever possible,
+making manifests portable when the data root is moved.
+
+The default manifest directory is:
+
+```text
+MANIFEST_DIR
+```
+
+---
 
 ### `compute_normalisation_stats.py`
 
-Computes per-channel statistics from prepared states referenced by a pair
-manifest.
+Computes separate per-channel normalisation statistics for:
 
-It deduplicates shared states, ignores expected `NaN` pressure cells, rejects
-infinite values, and computes count, mean, population standard deviation,
-minimum, maximum, and validity information for each channel.
+1. prepared SINGV states;
+2. prepared ERA5 backgrounds.
 
-Run this on the **training manifest only**:
+The script reads a six-column dataset manifest.
 
-```bash
-python compute_normalisation_stats.py   ~/scratch/retraining/manifests/training_19950101_19950131_pairs.csv
-```
+Input and target SINGV states are deduplicated before processing, so a state
+shared by neighbouring forecast pairs contributes only once.
 
-It automatically creates:
+For every channel, the script calculates:
 
-```text
-~/scratch/retraining/normalisation_stats/
-├── training_19950101_19950131_normalisation.npz
-└── training_19950101_19950131_normalisation.csv
-```
+- count;
+- valid fraction;
+- mean;
+- population standard deviation (`ddof=0`);
+- raw minimum and maximum;
+- normalised minimum and maximum.
 
-The NPZ file is consumed by `singv.py`. The CSV is for human inspection.
+Expected `NaN` values in masked SINGV pressure cells are ignored. Infinite
+values are rejected.
 
-Do not compute separate validation or testing statistics. Training,
-validation, and testing states must all use statistics calculated from the
-training split.
+ERA5 backgrounds are required to contain only finite values.
 
-### `singv.py`
+Normalisation statistics should be computed from the **training split only**.
 
-Defines `SINGVDataset`, the custom StormCast dataset adapter.
-
-It:
-
-- reads training or validation pairs from a CSV manifest;
-- loads prepared NetCDF states;
-- loads training-set normalisation statistics;
-- normalises each channel;
-- replaces invalid normalised cells with zero;
-- returns a target mask so invalid cells do not contribute to the loss;
-- returns data in the structure expected by the StormCast trainer.
-
-The dataset currently has:
-
-```text
-75 state channels
-0 background channels
-624 × 624 spatial shape
-6-hour input-target interval
-```
-
-This module is imported by StormCast and is not normally run directly.
-
-### `training_smoke_test.sh`
-
-Runs a small end-to-end StormCast regression test.
-
-It:
-
-1. links the custom dataset adapter and YAML files into the official StormCast
-   example directory;
-2. constructs the dataset and loads one real sample;
-3. checks the returned shapes;
-4. prints the final Hydra configuration;
-5. runs two training steps and one validation step;
-6. saves a timestamped checkpoint.
-
-From the repository root:
+Example:
 
 ```bash
-conda activate stormcast
-bash retraining/training_smoke_test.sh
+python preprocessing/compute_normalisation_stats.py \
+    ~/scratch/stormcast-data/manifests/training_19950101_19950131.csv
 ```
 
-A successful smoke test proves that the dataset, model, loss, backpropagation,
-validation, and checkpoint-saving pipeline work together. It does not produce
-a scientifically useful model.
-
-### `config/`
-
-Contains Hydra YAML configuration files.
+Four files are generated in `NORMALISATION_DIR`:
 
 ```text
-config/
-├── <experiment>.yaml
-└── dataset/
-    └── <dataset>.yaml
+training_19950101_19950131_normalisation_stats.npz
+training_19950101_19950131_normalisation_stats.csv
+
+training_19950101_19950131_background_normalisation_stats.npz
+training_19950101_19950131_background_normalisation_stats.csv
 ```
 
-Files directly inside `config/` are top-level experiment recipes. They select
-and combine the dataset, model, training, sampler, and Hydra configurations,
-then apply experiment-specific overrides.
+The NPZ files are machine-readable and are used during training.
 
-Files inside `config/dataset/` configure only the dataset, such as:
+The CSV files contain the same per-channel information for inspection.
 
-- the dataset class;
-- data root;
-- training manifest;
-- validation manifest;
-- normalisation file.
+Validation and testing data must use the statistics computed from the training
+split. Do not calculate independent validation or testing statistics.
 
-The top-level experiment YAML refers to a dataset YAML through a Hydra default
-such as:
+---
 
-```yaml
-defaults:
-  - dataset/singv_smoke
-```
+## StormCast dataset integration
 
-### `__init__.py`
-
-Marks this directory as a Python package. It is not normally run directly.
-
-### `__pycache__/`
-
-Automatically generated Python bytecode cache. Do not edit it. It does not
-contain source code and should normally be excluded from Git.
-
-## Generated scratch structure
-
-The pipeline writes generated data outside the Git repository:
+The custom dataset integration lives under:
 
 ```text
-~/scratch/retraining/
+stormcast/datasets/
+```
+
+It reads the generated manifests and prepared NetCDF files and provides samples
+to the StormCast trainer.
+
+For each sample, the training dataset supplies:
+
+```text
+state:       75 × 624 × 624
+background:  26 × 624 × 624
+target:      75 × 624 × 624
+```
+
+Training-set normalisation statistics are applied separately to the SINGV state
+and ERA5 background.
+
+Invalid SINGV pressure cells are stored as `NaN` during preprocessing. During
+dataset loading they are handled using the pressure mask so that invalid
+below-ground regions do not contribute to the training loss.
+
+---
+
+## Generated data structure
+
+With the default `DATA_ROOT` in `paths.py`, generated data have the following
+structure:
+
+```text
+~/scratch/stormcast-data/
 ├── audit/
+│   ├── audit_issues.csv
+│   └── audit_summary.csv
+│
 ├── assembled/
+│   └── assembled_YYYYMMDD_HHMM.nc
+│
 ├── prepared/
+│   └── prepared_YYYYMMDD_HHMM.nc
+│
+├── background/
+│   ├── raw/
+│   └── prepared/
+│       └── background_YYYYMMDD_HHMM.nc
+│
 ├── manifests/
-├── normalisation_stats/
-└── runs/
+│   └── <split>_<start>_<end>.csv
+│
+└── normalisation_stats/
+    ├── <training-range>_normalisation_stats.npz
+    ├── <training-range>_normalisation_stats.csv
+    ├── <training-range>_background_normalisation_stats.npz
+    └── <training-range>_background_normalisation_stats.csv
 ```
 
-Keep source code, YAML configuration, and this README in Git. Treat the
-contents of `~/scratch/retraining/` as generated data.
+Generated data should remain outside the Git repository.
+
+---
 
 ## Typical workflow
 
-### 1. Activate the environment
+The following commands assume they are run from the repository root.
+
+### 1. Configure paths
+
+Edit:
+
+```text
+preprocessing/paths.py
+```
+
+Set the local:
+
+```python
+DATA_ROOT
+SINGV_ARCHIVE_ROOT
+```
+
+---
+
+### 2. Activate the environment
 
 ```bash
 conda activate stormcast
 ```
 
-Run large archive audits and dataset builds on a compute node rather than a
-login node.
+Large archive audits and dataset builds should be run on a compute node rather
+than a login node.
 
-### 2. Audit the requested dates
+---
 
-```bash
-python retraining/audit_singv_data.py   --start-date 1995-01-01   --end-date 1995-02-07
-```
-
-### 3. Preview the dataset ranges
+### 3. Optional: audit the requested SINGV period
 
 ```bash
-python retraining/build_dataset.py   --split training   --start-date 1995-01-01   --end-date 1995-01-31   --dry-run
-
-python retraining/build_dataset.py   --split validation   --start-date 1995-02-01   --end-date 1995-02-07   --dry-run
+python preprocessing/audit_singv_data.py \
+    --start-date 1995-01-01 \
+    --end-date 1995-02-07
 ```
 
-### 4. Build training and validation data
+---
+
+### 4. Preview dataset generation
+
+Training:
 
 ```bash
-python retraining/build_dataset.py   --split training   --start-date 1995-01-01   --end-date 1995-01-31
-
-python retraining/build_dataset.py   --split validation   --start-date 1995-02-01   --end-date 1995-02-07
+python preprocessing/build_dataset.py \
+    --split training \
+    --start-date 1995-01-01 \
+    --end-date 1995-01-31 \
+    --dry-run
 ```
 
-### 5. Compute training statistics
+Validation:
 
 ```bash
-python retraining/compute_normalisation_stats.py   ~/scratch/retraining/manifests/training_19950101_19950131_pairs.csv
+python preprocessing/build_dataset.py \
+    --split validation \
+    --start-date 1995-02-01 \
+    --end-date 1995-02-07 \
+    --dry-run
 ```
 
-### 6. Update the dataset YAML
+`build_dataset.py` is the main preprocessing entry point. It automatically
+assembles and prepares the required SINGV states, downloads and prepares ERA5
+backgrounds, validates each six-hour sample, and writes the manifest.
 
-Point the dataset configuration to:
+---
 
-```yaml
-train_manifest: manifests/training_19950101_19950131_pairs.csv
-validation_manifest: manifests/validation_19950201_19950207_pairs.csv
-normalisation_path: normalisation_stats/training_19950101_19950131_normalisation.npz
-```
-
-### 7. Run the smoke test
+### 5. Build training and validation datasets
 
 ```bash
-bash retraining/training_smoke_test.sh
+python preprocessing/build_dataset.py \
+    --split training \
+    --start-date 1995-01-01 \
+    --end-date 1995-01-31
 ```
+
+```bash
+python preprocessing/build_dataset.py \
+    --split validation \
+    --start-date 1995-02-01 \
+    --end-date 1995-02-07
+```
+
+This generates both the SINGV states and matching ERA5 backgrounds required by
+each sample.
+
+---
+
+### 6. Compute training normalisation statistics
+
+```bash
+python preprocessing/compute_normalisation_stats.py \
+    ~/scratch/stormcast-data/manifests/training_19950101_19950131.csv
+```
+
+This generates separate statistics for the SINGV state and ERA5 background.
+
+---
+
+### 7. Configure StormCast training
+
+Point the StormCast dataset configuration to:
+
+```text
+training manifest
+validation manifest
+SINGV normalisation NPZ
+ERA5 background normalisation NPZ
+```
+
+All validation and testing samples must use the statistics calculated from the
+training split.
+
+---
+
+### 8. Run training
+
+Training is launched through the StormCast training code and the corresponding
+Hydra experiment configuration under:
+
+```text
+stormcast/config/
+```
+
+The preprocessing pipeline itself does not contain model checkpoints or
+generated training runs.
+
+---
 
 ## Important reminders
 
 - Valid SINGV pressure-level times are `01`, `07`, `13`, and `19` UTC.
-- Each model sample predicts the state six hours after its input state.
-- Date ranges are inclusive.
-- Pairs do not cross the boundary of their requested split.
-- Normalisation statistics must come from training data only.
-- Invalid pressure cells remain `NaN` in prepared files, are filled with zero
-  after normalisation, and are excluded from the loss using the target mask.
-- `build_pair.py` is for one pair; `build_dataset.py` is for a full range.
-- `singv.py` and `prep_utils.py` are imported modules, not normal command-line
-  entry points.
-- The smoke configuration should remain small and separate from the eventual
-  full training configuration.
+- Every model sample predicts the SINGV state six hours after its input.
+- ERA5 background conditioning is taken at the same valid time as the SINGV
+  input.
+- SINGV states contain 75 channels.
+- ERA5 backgrounds contain 26 channels.
+- Prepared SINGV and ERA5 fields use the same `624 × 624` grid.
+- Date ranges supplied to `build_dataset.py` are inclusive.
+- Pairs do not cross the requested dataset boundary.
+- Known missing SINGV source dates are skipped rather than interpolated.
+- Normalisation statistics must be calculated from training data only.
+- Invalid pressure-level SINGV cells remain `NaN` in prepared files and are
+  excluded appropriately during training.
+- `build_pair.py` is intended for individual samples; `build_dataset.py` is
+  intended for complete ranges.
+- `prep_utils.py` and `paths.py` are helper modules rather than normal
+  command-line entry points.
+- Generated NetCDF files, manifests, audit reports, statistics, logs, and
+  checkpoints should not be committed to Git.
+- `__pycache__/` is generated automatically by Python and should be excluded
+  from Git.
