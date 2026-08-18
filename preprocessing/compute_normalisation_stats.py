@@ -17,6 +17,7 @@ manifest : positional argument
     Example row:
 
         1995-01-01T01:00:00,prepared/prepared_19950101_0100.nc,
+        1995-01-01T01:00:00,background/prepared/background_19950101_0100.nc,
         1995-01-01T07:00:00,prepared/prepared_19950101_0700.nc
 
     The ``input_file`` and ``target_file`` columns are used for SINGV
@@ -25,11 +26,11 @@ manifest : positional argument
 
 --data-root : optional
     Root directory used to resolve relative paths in the manifest.
-    Defaults to ``~/scratch/retraining``.
+    Defaults to DATA_ROOT configured in paths.py.
 
 --output-dir : optional
     Directory in which the generated NPZ and CSV files are written.
-    Defaults to ``~/scratch/retraining/normalisation_stats``.
+    Defaults to NORMALISATION_DIR configured in paths.py.
 
 Prepared state format
 ---------------------
@@ -95,6 +96,8 @@ from typing import Iterable, Sequence
 import numpy as np
 import xarray as xr
 
+import paths
+
 
 SURFACE_CHANNELS = ("tas", "uas", "vas", "psl", "pr")
 PRESSURE_PREFIXES = ("ta", "ua", "va", "hus", "zg")
@@ -139,9 +142,6 @@ EXPECTED_BACKGROUND_CHANNELS = (
     "mslp",
     "sp",
 )
-
-DEFAULT_DATA_ROOT = Path("~/scratch/retraining")
-DEFAULT_OUTPUT_DIR = DEFAULT_DATA_ROOT / "normalisation_stats"
 
 
 @dataclass(frozen=True)
@@ -310,19 +310,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--data-root",
         type=Path,
-        default=DEFAULT_DATA_ROOT,
+        default=paths.DATA_ROOT,
         help=(
             "Root directory used to resolve relative paths in the manifest. "
-            "Default: ~/scratch/retraining"
+            f"Default: {paths.DATA_ROOT}"
         ),
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=DEFAULT_OUTPUT_DIR,
+        default=paths.NORMALISATION_DIR,
         help=(
             "Directory in which automatically named NPZ and CSV outputs are "
-            "written. Default: ~/scratch/retraining/normalisation_stats"
+            f"written. Default: {paths.NORMALISATION_DIR}"
         ),
     )
     parser.add_argument(
