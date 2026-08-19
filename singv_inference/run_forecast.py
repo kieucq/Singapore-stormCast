@@ -31,10 +31,7 @@ from earth2studio.io import ZarrBackend
 from earth2studio.models.px import StormCast
 
 import utils as ut
-
-
-PRETRAINED_DIR = Path("~/scratch/pretrained").expanduser()
-OUTPUT_DIR = PRETRAINED_DIR / "singv_forecasts"
+from paths import FORECAST_DIR
 
 N_STEPS = 1
 
@@ -140,7 +137,7 @@ def main():
     if not input_path.is_file():
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    FORECAST_DIR.mkdir(parents=True, exist_ok=True)
 
     input_stem = input_path.stem
 
@@ -150,7 +147,7 @@ def main():
     else:
         output_name = f"singv_forecast_{input_stem}.zarr"
 
-    output_path = OUTPUT_DIR / output_name
+    output_path = FORECAST_DIR / output_name
 
     print("Input: ", input_path)
     print("Output:", output_path)

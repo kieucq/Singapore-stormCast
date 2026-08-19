@@ -27,15 +27,9 @@ from datetime import datetime
 import numpy as np
 import xarray as xr
 
+from paths import COLLATED_DIR, SINGV_ARCHIVE_ROOT
+
 # ── Configuration ──────────────────────────────────────────────────────────
-
-BASE_DIR = Path(
-    "/home/project/13004327/data_service/model_data/V3_Historical/"
-    "V3-WMC-2/CCRS/ERA5/historical/reanalysis/SINGV-RCM/vn5"
-)
-
-PRETRAINED_DIR = Path("~/scratch/pretrained").expanduser()
-OUTPUT_DIR = PRETRAINED_DIR / "singv_collated"
 
 # Variables to collect, with their frequency directory and StormCast role
 SURFACE_VARS = {
@@ -68,7 +62,7 @@ def find_surface_file(varname: str, dt: datetime) -> Path:
     yyyymmdd = dt.strftime("%Y%m%d")
     pattern = f"{varname}_*_1hr_{yyyymmdd}0000-{yyyymmdd}2300.nc"
 
-    directory = BASE_DIR / "1hr" / varname / yyyymm
+    directory = SINGV_ARCHIVE_ROOT / "1hr" / varname / yyyymm
     matches = sorted(directory.glob(pattern))
 
     if not matches:
@@ -88,7 +82,7 @@ def find_pressure_file(varname: str, dt: datetime) -> Path:
     yyyymmdd = dt.strftime("%Y%m%d")
     pattern = f"{varname}_*_6hr_{yyyymmdd}0100-{yyyymmdd}1900.nc"
 
-    directory = BASE_DIR / "6hr" / varname / yyyymm
+    directory = SINGV_ARCHIVE_ROOT / "6hr" / varname / yyyymm
     matches = sorted(directory.glob(pattern))
 
     if not matches:
@@ -177,7 +171,7 @@ def collect(dt: datetime, output_path: Path):
 
 def default_output_path(dt: datetime) -> Path:
     filename = f"singv_collated_{dt.strftime('%Y%m%d_%H%M')}.nc"
-    return OUTPUT_DIR / filename
+    return COLLATED_DIR / filename
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

@@ -28,12 +28,8 @@ from earth2studio.data import GFS_FX
 from earth2studio.models.px import StormCast
 
 import utils as ut
+from paths import INPUT_DIR
 
-
-# ── Configuration ─────────────────────────────────────────────────────────────
-
-PRETRAINED_DIR = Path("~/scratch/pretrained").expanduser()
-OUTPUT_DIR = PRETRAINED_DIR / "singv_inputs"
 
 # ── Command-line arguments ────────────────────────────────────────────────────
 
@@ -70,7 +66,7 @@ def make_output_path(input_path):
     else:
         output_name = f"singv_input_{stem}.nc"
 
-    return OUTPUT_DIR / output_name
+    return INPUT_DIR / output_name
 
 
 # ── StormCast coordinate setup ────────────────────────────────────────────────

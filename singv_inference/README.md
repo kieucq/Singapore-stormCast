@@ -1,8 +1,29 @@
-# Pretrained StormCast Inference
+# Pretrained StormCast Inference with SINGV
 
-Scripts for collecting SingV3/SINGV-RCM data on NSCC Aspire2A, converting it into the format expected by the pretrained StormCast model, and running inference.
+This directory contains an exploratory pipeline for running the original pretrained StormCast model using SINGV-RCM data.
 
-NetCDF outputs are arranged in an `ncview`-friendly format for inspection. Output files are written under:
+The workflow:
+
+1. collects the required SINGV variables;
+2. converts them into StormCast-compatible inputs;
+3. runs pretrained StormCast inference using ERA5 background conditioning.
+
+This was used as an intermediate step before retraining StormCast on SINGV data.
+
+## Configure paths
+
+Filesystem paths are configured in:
+
+```text
+paths.py
+```
+
+Set:
+
+- `DATA_ROOT` to the location used for generated files;
+- `SINGV_ARCHIVE_ROOT` to the SINGV-RCM archive.
+
+By default, generated files are stored under:
 
 ```text
 ~/scratch/pretrained/
@@ -13,15 +34,15 @@ NetCDF outputs are arranged in an `ncview`-friendly format for inspection. Outpu
 
 ## Workflow
 
-Run the following commands from `pretrained_inference/`.
+Run the following commands from `singv_inference/`.
 
-### 1. Collate SingV3 data
+### 1. Collect SINGV data
 
 ```bash
 python collect_singv.py --datetime YYYY-MM-DDTHH:MM
 ```
 
-Available pressure-level times are:
+Pressure-level fields are available at:
 
 ```text
 01:00, 07:00, 13:00, 19:00 UTC
@@ -39,6 +60,8 @@ Output:
 python prepare_singv_input.py COLLATED_FILE.nc
 ```
 
+This converts the SINGV fields into the 99-channel input format expected by pretrained StormCast.
+
 Output:
 
 ```text
@@ -51,36 +74,22 @@ Output:
 python run_forecast.py INPUT_FILE.nc
 ```
 
+StormCast uses the prepared SINGV state together with ERA5 background conditioning retrieved through ARCO.
+
 Output:
 
 ```text
 ~/scratch/pretrained/singv_forecasts/
 ```
 
-The forecast length is controlled by `N_STEPS` in `run_forecast.py`. It is currently set to one step.
-
-## Diagnostics
-
-Run diagnostic scripts from `pretrained_inference/diagnostics/`.
-
-Validate the variables and coordinates in a collated dataset:
-
-```bash
-python validate_singv_dataset.py COLLATED_FILE
-```
-
-Print variable statistics and pressure-level diagnostics:
-
-```bash
-python inspect_singv_dataset.py COLLATED_FILE
-```
-
-Compare collated and prepared 2 m temperature fields:
-
-```bash
-python compare_t2m_fields.py COLLATED_FILE INPUT_FILE
-```
+The forecast length is controlled by `N_STEPS` in `run_forecast.py`.
 
 ## Notes
 
-This pipeline adapts SingV3 data for a StormCast model pretrained on a different domain and data format. Several fields, including surface pressure, hybrid-level variables, and composite reflectivity, therefore require approximate conversions.
+The pretrained StormCast model was developed for a different domain and input format. Some SINGV fields therefore require approximate conversions, including:
+
+- surface pressure;
+- pressure-level to hybrid-level conversion;
+- composite reflectivity derived from precipitation.
+
+This workflow was intended to test SINGV compatibility with pretrained StormCast rather than to produce physically reliable forecasts.

@@ -1,128 +1,0 @@
-WARNING:root:Missing keys when loading EDMPrecond: ['sigma_data']
-Warp DeprecationWarning: The namespace `warp.context` will soon be removed from the public API. It can still be accessed from `warp._src.context` but might be changed or removed without notice.
-Warp DeprecationWarning: The symbol `warp.context.Device` will soon be removed from the public API. Use `warp.Device` instead.
-Input:  /home/users/nus/e1155933/scratch/pretrained/singv_inputs/singv_input_20100625_1300.nc
-Output: /home/users/nus/e1155933/scratch/pretrained/singv_forecasts/singv_forecast_20100625_1300.zarr
-
-StormCast ARCO conditioning target
-----------------------------------
-Shape:           (512, 640)
-Latitude range: -7.289999961853027 to 9.972000122070312
-Longitude range: 93.16000366210938 to 110.4219970703125
-Centre point:    1.3578903675079346 101.80450439453125
-SingV input time:        2010-06-25T13:00:00.000000000
-ERA5 conditioning time:  2010-06-25 13:00:00
-
-Running StormCast...
-[32m2026-06-26 10:22:43.006[0m | [1mINFO    [0m | [36mearth2studio.run[0m:[36mdeterministic[0m:[36m78[0m - [1mRunning simple workflow![0m
-[32m2026-06-26 10:22:43.007[0m | [1mINFO    [0m | [36mearth2studio.run[0m:[36mdeterministic[0m:[36m85[0m - [1mInference device: cuda[0m
-[32m2026-06-26 10:22:43.574[0m | [32m[1mSUCCESS [0m | [36mearth2studio.run[0m:[36mdeterministic[0m:[36m109[0m - [32m[1mFetched data from MyLocalData[0m
-[32m2026-06-26 10:22:43.996[0m | [1mINFO    [0m | [36mearth2studio.run[0m:[36mdeterministic[0m:[36m139[0m - [1mInference starting![0m
-
-Running inference:   0%|          | 0/2 [00:00<?, ?it/s][A
-Running inference:  50%|█████     | 1/2 [00:02<00:02,  2.31s/it][A
-ARCO CONDITIONING AUDIT
-=======================
-Call number:        1
-Data source type:   ARCO
-Target shape:       (512, 640)
-Latitude range:    -7.289999961853027 to 9.972000122070312
-Longitude range:   93.16000366210938 to 110.4219970703125
-Centre coordinate: 1.3578903675079346 101.80450439453125
-Requested time:    ['2010-06-25T13:00:00.000000000']
-Requested lead:    [0]
-Variables:         ['u10m' 'v10m' 't2m' 'tcwv' 'sp' 'msl' 'u1000' 'u850' 'u500' 'u250'
- 'v1000' 'v850' 'v500' 'v250' 'z1000' 'z850' 'z500' 'z250' 't1000' 't850'
- 't500' 't250' 'q1000' 'q850' 'q500' 'q250']
-Fetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]
-                                                                [A                                                          
-Running inference:  50%|█████     | 1/2 [00:07<00:02,  2.31s/it][AFetching ARCO data:   0%|          | 0/26 [00:00<?, ?it/s]Fetching ARCO data:   4%|▍         | 1/26 [00:01<00:28,  1.12s/it]Fetching ARCO data: 100%|██████████| 26/26 [00:01<00:00, 21.55it/s]
-
-Running inference: 100%|██████████| 2/2 [00:18<00:00, 10.68s/it][ARunning inference: 100%|██████████| 2/2 [00:18<00:00,  9.43s/it]
-[32m2026-06-26 10:22:51.925[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: q850 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.925[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: z500 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.926[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: q500 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.926[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: v10m at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.926[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: t2m at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.927[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: tcwv at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.927[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: sp at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.927[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: z850 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.928[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: t1000 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.928[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: u500 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.929[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: v1000 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.929[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: t850 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.929[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: v850 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.930[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: v250 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.930[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: t500 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.930[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: u1000 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.931[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: q250 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.931[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: u850 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.931[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: msl at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.932[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: t250 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.932[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: u10m at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.932[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: z1000 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.933[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: z250 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.933[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: v500 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.933[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: q1000 at 2010-06-25T13:00:00[0m
-[32m2026-06-26 10:22:51.934[0m | [34m[1mDEBUG   [0m | [36mearth2studio.data.arco[0m:[36mfetch_array[0m:[36m301[0m - [34m[1mFetching ARCO zarr array for variable: u250 at 2010-06-25T13:00:00[0m
-Returned coordinate keys: ['time', 'lead_time', 'variable', 'lat', 'lon', '_lat', '_lon']
-Conditioning shape: (1, 1, 26, 512, 640)
-CONFIRMED: ARCO conditioning was interpolated onto the SINGV geographic domain.
-[32m2026-06-26 10:23:02.851[0m | [32m[1mSUCCESS [0m | [36mearth2studio.run[0m:[36mdeterministic[0m:[36m151[0m - [32m[1m
-Inference complete[0m
-
-Inference completed.
-Saved Zarr: /home/users/nus/e1155933/scratch/pretrained/singv_forecasts/singv_forecast_20100625_1300.zarr
-
-Converting output to ncview-compatible NetCDF...
-Saved NetCDF: /home/users/nus/e1155933/scratch/pretrained/singv_forecasts/singv_forecast_20100625_1300.nc
