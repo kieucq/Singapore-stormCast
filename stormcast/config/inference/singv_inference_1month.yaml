@@ -1,21 +1,24 @@
 
-outdir: /scratch/users/nus/e1155933/retraining/inference
+outdir: ${dataset.data_root}/inference
 experiment_name: singv-inference-1month
 run_id: regression-diffusion-comparison
 rundir:  ${inference.outdir}/${inference.experiment_name}/${inference.run_id}
 
-regression_checkpoint: /scratch/users/nus/e1155933/retraining/runs/singv-regression-1month/training-1000steps/checkpoints_regression/StormCastUNet.0.1000.mdlus
-diffusion_checkpoint: /scratch/users/nus/e1155933/retraining/runs/singv-diffusion-1month/training-1000steps/checkpoints_diffusion/EDMPrecond.0.1000.mdlus
-
-# Initial and lead times
-initial_time: "1995-02-01T01:00:00" # datetime to intialize forecast with (YYYY-MM-DDTHH:MM:SS)
-                                    # note minimum time resolution of HRRR data is 1hr
-n_steps: 12 # number of steps (in units of 1hr timesteps) to forecast
+regression_checkpoint: ${dataset.data_root}/runs/singv-regression-1month/training-1000steps/checkpoints_regression/StormCastUNet.0.1000.mdlus
+diffusion_checkpoint: ${dataset.data_root}/runs/singv-diffusion-1month/training-1000steps/checkpoints_diffusion/EDMPrecond.0.1000.mdlus
 
 # I/O
-plot_var_state: [pr, tas] # state variable to plot
 plot_var_background: null
-output_state_channels: [ta_1000, ua_1000, ta_850, zg_500] # state variables to save to disk (empty list == all channels saved)
+output_state_channels:
+  - tas
+  - pr
+  - ta_1000
+  - ua_1000
+  - ta_850
+  - zg_500
+
+# you can export inference to NetCDF too but
+# this is not done for this example
 save_vertical_vars: []
 save_vertical_levels: []
 save_horizontal_vars: []

@@ -21,4 +21,4 @@ defaults:
   - _self_
 
 model:
-  regression_weights: /scratch/users/nus/e1155933/retraining/runs/singv-regression-1month/training-1000steps/checkpoints_regression/StormCastUNet.0.1000.mdlus
+  regression_weights: ${dataset.data_root}/runs/singv-regression-1month/training-1000steps/checkpoints_regression/StormCastUNet.0.1000.mdlus

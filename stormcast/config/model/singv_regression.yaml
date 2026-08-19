@@ -14,6 +14,3 @@ hyperparameters:
   model_channels: 128
   attn_resolutions: [] 
   checkpoint_level: 0
-
-# Pretrained regression model
-regression_weights: "" 

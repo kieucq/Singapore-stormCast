@@ -1,10 +1,11 @@
 # SINGV dataset used for the example 1-month run
 
-name: regression_dataset_adapter.RegressionDatasetAdapter
+name: singv_dataset_adapter.SINGVDatasetAdapter
 
-data_root: ~/scratch/retraining
+data_root: ${oc.env:HOME}/scratch/stormcast-data
 
 train_manifest: manifests/training_19950101_19950131.csv
 validation_manifest: manifests/validation_19950201_19950207.csv
 
 normalisation_path: normalisation_stats/training_19950101_19950131_normalisation_stats.npz
+background_normalisation_path: normalisation_stats/training_19950101_19950131_background_normalisation_stats.npz

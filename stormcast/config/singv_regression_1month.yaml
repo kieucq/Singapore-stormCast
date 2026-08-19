@@ -2,8 +2,7 @@
 
 defaults:
   - dataset/singv_1month
-  - model/stormcast
+  - model/singv_regression
   - training/singv_regression_1month
-  - sampler/edm_deterministic
   - hydra/default
   - _self_

@@ -1,5 +1,5 @@
 # General training config items
-outdir: /scratch/users/nus/e1155933/retraining/runs
+outdir: ${dataset.data_root}/runs
 experiment_name: singv-regression-1month
 run_id: training-1000steps
 rundir: ${training.outdir}/${training.experiment_name}/${training.run_id}
@@ -16,9 +16,9 @@ lr_rampup_steps: 0 # Number of training steps over which to perform linear LR wa
 clip_grad_norm: -1 # Threshold for gradient clipping, set to -1 to disable
 
 # Logging frequency
-print_progress_freq: 250 # How often to print progress, measured in number of training steps
+print_progress_freq: 20 # How often to print progress, measured in number of training steps
 checkpoint_freq: 250 # How often to save the checkpoints, measured in number of training steps
-validation_freq: 16 # how often to record the validation loss, measured in number of training steps
+validation_freq: 250 # how often to record the validation loss, measured in number of training steps
 
 validation_steps: 1 # Number of batches to evaluate during validation
 validation_plot_variables: ["tas", "pr", "ta_1000", "ua_1000", "ta_850", "zg_500"]

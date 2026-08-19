@@ -1,5 +1,5 @@
 # General training config items
-outdir: /scratch/users/nus/e1155933/retraining/runs
+outdir: ${dataset.data_root}/runs
 experiment_name: singv-diffusion-1month
 run_id: training-1000steps
 rundir: ${training.outdir}/${training.experiment_name}/${training.run_id}
@@ -21,10 +21,13 @@ print_progress_freq: 20 # How often to print progress, measured in number of tra
 checkpoint_freq: 250 # How often to save the checkpoints, measured in number of training steps
 validation_freq: 250 # how often to record the validation loss, measured in number of training steps
 
+# Performance and optimization
 perf:
   fp_optimizations: amp-bf16
   torch_compile: True
   allow_tf32: True
+  use_apex_gn: False # Use Apex GroupNorm (enables channels_last memory format)
+  allow_fp16_reduced_precision: False # Allow reduced precision reductions in fp16
 
 validation_steps: 1 # Number of batches to evaluate during validation
 validation_plot_variables: ["tas", "pr", "ta_1000", "ua_1000", "ta_850", "zg_500"]
@@ -42,11 +45,6 @@ seed: -1 # Specify a random seed by setting this to an int > 0
 cudnn_benchmark: True # Enable/disable CuDNN benchmark mode
 resume_checkpoint: "latest" # epoch number to continue training from, or "latest" for the latest checkpoint
 initial_weights: null # if not null, a .mdlus checkpoint to load weights at the start of training; no effect if training continues from a checkpoint
-
-# Performance and optimization (like corrdiff perf section)
-perf:
-  use_apex_gn: False # Use Apex GroupNorm (enables channels_last memory format)
-  allow_fp16_reduced_precision: False # Allow reduced precision reductions in fp16
 
 # Optimizer configuration
 optimizer:

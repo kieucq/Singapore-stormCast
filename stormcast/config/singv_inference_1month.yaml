@@ -8,20 +8,28 @@
 
 defaults:
   - dataset/singv_1month
-  - model/singv_diffusion_1month # change to singv_regression_1month to perform inference using only regression model
+  - model/singv_diffusion 
   - sampler/edm_deterministic
   - inference/singv_inference_1month
   - _self_
 
 inference:
-  regression_checkpoint: /scratch/users/nus/e1155933/retraining/runs/singv-regression-1month/training-1000steps/checkpoints_regression/StormCastUNet.0.1000.mdlus
-  diffusion_checkpoint: /scratch/users/nus/e1155933/retraining/runs/singv-diffusion-1month/training-1000steps/checkpoints_diffusion/EDMPrecond.0.1000.mdlus
+  regression_checkpoint: ${dataset.data_root}/runs/singv-regression-1month/training-1000steps/checkpoints_regression/StormCastUNet.0.1000.mdlus
+  diffusion_checkpoint: ${dataset.data_root}/runs/singv-diffusion-1month/training-1000steps/checkpoints_diffusion/EDMPrecond.0.1000.mdlus
 
   # First input time in the February 1995 validation period.
   initial_time: "1995-02-01T01:00:00"
-  n_steps: 3
+  n_steps: 1 # one 6 hour inference. to infer 12 or 18 hours, step n_steps to 2 or 3 respectively.
 
+  use_diffusion: True # change to False to run inference using only regression model
 
+  plot_state_variables:
+    - tas
+    - pr
+    - ta_1000
+    - ua_1000
+    - ta_850
+    - zg_500
 
 hydra:
   run:
