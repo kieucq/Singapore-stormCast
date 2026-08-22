@@ -137,6 +137,20 @@ stormcast-data/
 
 The data root can be changed in the preprocessing and StormCast dataset configurations.
 
+## Current status and future work
+
+The full pipeline from data preparation to training and inference is complete and tested. The regression model produces reasonable forecasts, but the diffusion model currently adds too much small-scale noise.
+
+The main suspected issue is masking. SINGV pressure-level data contain invalid cells below terrain, while the original HRRR-based StormCast setup does not require this treatment. Masking has been implemented, but its handling in the loss and diffusion calculations still needs improvement.
+
+Further work includes:
+
+- improving mask handling throughout training;
+- adding land mask and orography as model inputs;
+- testing 1-hour surface-only forecasts instead of the current 6-hour forecasts.
+
+The current 6-hour interval is limited by the availability of SINGV pressure-level data. A 1-hour surface-only setup may be better suited to short-lived variables such as precipitation (`pr`) and to the diffusion model.
+
 ## Quick start
 
 See [`PIPELINE_GUIDE.md`](PIPELINE_GUIDE.md) for the full example workflow:
