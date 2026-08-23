@@ -4,7 +4,7 @@ This repository contains work from a summer internship project adapting NVIDIA's
 
 The project was carried out in the Core Modelling Development branch of the Centre for Climate Research Singapore (CCRS) by Aditya Jayaraj, an undergraduate from the National University of Singapore, under the supervision of Dr Chanh Kieu.
 
-Questions and enquiries may be directed to `chanh_kieu@nea.gov.sg`.
+Questions and enquiries may be directed to either `aditya.j@u.nus.edu` or `chanh_kieu@nea.gov.sg/kieucq@gmail.com`.
 
 For a step-by-step example covering preprocessing, training and inference, see [`PIPELINE_GUIDE.md`](PIPELINE_GUIDE.md).
 
